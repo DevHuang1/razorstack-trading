@@ -1,5 +1,5 @@
-import { runResearchPipeline } from "@/lib/agents/cio";
-import type { PipelineEvent } from "@/lib/contracts/research";
+import { buildResearchInput, runResearchPipeline } from "@/lib/agents/cio";
+import { AnalyzeOpportunityInputSchema, type AnalyzeOpportunityInput, type PipelineEvent } from "@/lib/contracts/research";
 
 export const dynamic = "force-dynamic";
 
@@ -10,19 +10,41 @@ function symbolFromRequest(request: Request): string {
   return new URL(request.url).searchParams.get("symbol") ?? "";
 }
 
-async function readBodySymbol(request: Request): Promise<string> {
+async function readBodyInput(request: Request): Promise<AnalyzeOpportunityInput | string | null> {
   try {
-    const body = (await request.json()) as { symbol?: unknown };
-    return typeof body.symbol === "string" ? body.symbol : "";
+    const body = (await request.json()) as Record<string, unknown>;
+    if (typeof body.symbol === "string" && body.marketData === undefined) {
+      return body.symbol;
+    }
+    return AnalyzeOpportunityInputSchema.parse(body);
   } catch {
-    return "";
+    return null;
   }
 }
 
-async function handleResearch(symbol: string): Promise<Response> {
-  const trimmed = symbol.trim();
-  if (!trimmed || !/^[A-Za-z]{1,6}$/.test(trimmed)) {
+async function resolveInput(request: Request): Promise<AnalyzeOpportunityInput | Response> {
+  const candidate = request.method === "POST" ? await readBodyInput(request) : symbolFromRequest(request).trim();
+  if (candidate === null) {
+    return Response.json({ error: "Invalid request body" }, { status: 400 });
+  }
+  const symbol = typeof candidate === "string" ? candidate.trim() : candidate.symbol;
+  if (!symbol || !/^[A-Za-z]{1,6}$/.test(symbol)) {
     return Response.json({ error: "Provide a valid ticker symbol, e.g. NVDA" }, { status: 400 });
+  }
+  if (typeof candidate === "string") {
+    try {
+      return await buildResearchInput(candidate);
+    } catch {
+      return Response.json({ error: `No market data available for ${candidate}` }, { status: 404 });
+    }
+  }
+  return candidate;
+}
+
+async function handleResearch(request: Request): Promise<Response> {
+  const resolved = await resolveInput(request);
+  if (resolved instanceof Response) {
+    return resolved;
   }
 
   const encoder = new TextEncoder();
@@ -31,7 +53,7 @@ async function handleResearch(symbol: string): Promise<Response> {
       const send = (event: PipelineEvent) => {
         controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       };
-      for await (const event of runResearchPipeline(trimmed)) {
+      for await (const event of runResearchPipeline(resolved)) {
         send(event);
       }
       controller.close();
@@ -47,9 +69,9 @@ async function handleResearch(symbol: string): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  return handleResearch(await readBodySymbol(request));
+  return handleResearch(request);
 }
 
 export async function GET(request: Request): Promise<Response> {
-  return handleResearch(symbolFromRequest(request));
+  return handleResearch(request);
 }

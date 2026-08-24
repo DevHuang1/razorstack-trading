@@ -1,64 +1,163 @@
-import { generateText, Output } from "ai";
-import { hasLLM, getModel, normalizeAgentMessage, normalizeConfidence } from "./llm";
 import {
-  AgentMessageSchema,
-  type AgentMessage,
-  type MarketSnapshot,
+  AgentOpinionSchema,
+  ThesisAgentInputSchema,
+  type AnalysisStatement,
+  type AgentOpinion,
+  type ThesisAgentInput,
 } from "@/lib/contracts/research";
+import { StructuredAgent, type StructuredAgentConfig } from "./base-agent";
+import { exposurePctForSector, sectorForSymbol } from "./portfolio-utils";
+import { BULL_SYSTEM } from "./prompts";
 
-const SYSTEM = `You are the Bull Agent on an autonomous AI trading desk.
-Your job is to build the STRONGEST evidence-based case FOR a bullish position on the given symbol.
-Use the market data and colleague reports provided. Be persuasive but honest about confidence levels.
-Respond ONLY with the structured output requested.`;
-
-function buildPrompt(
-  symbol: string,
-  snapshot: MarketSnapshot,
-  colleagueReports: AgentMessage[],
-): string {
-  const reports = colleagueReports
-    .map((m) => `[${m.role}] ${m.headline}\n${m.body}\nKey points: ${m.keyPoints.join("; ")}`)
-    .join("\n\n");
-  return `Symbol: ${symbol}
-Price: $${snapshot.price} | 1-month change: ${snapshot.change1mPct}% | RSI(14): ${snapshot.rsi14}
-Regime: ${snapshot.regime}
-
-Colleague reports:
-${reports}
-
-Build the strongest bull case for ${symbol}.`;
+function observation(statement: string): AnalysisStatement {
+  return { kind: "observation", statement };
 }
 
-function mockBullCase(symbol: string, snapshot: MarketSnapshot): AgentMessage {
-  return {
-    role: "bull",
-    stance: "bullish",
-    headline: `${symbol} offers attractive risk/reward for upside participation`,
-    body: `The combination of positive news flow and ${
-      snapshot.price > snapshot.sma20 ? "constructive" : "stabilizing"
-    } price action supports a bullish thesis. Defined-risk options structures (bull call spreads) let the desk express this view while capping downside — well suited at realized volatility of ${snapshot.realizedVol30dAnnPct}%.`,
-    confidence: 74,
-    keyPoints: [
-      "Earnings momentum and demand catalysts remain intact",
-      `Trend structure ${snapshot.price > snapshot.sma20 ? "confirms" : "is early in confirming"} the move`,
-      "Defined-risk spread limits capital at risk",
-    ],
-  };
+function interpretation(statement: string): AnalysisStatement {
+  return { kind: "interpretation", statement };
 }
 
-export async function runBullAgent(
-  symbol: string,
-  snapshot: MarketSnapshot,
-  colleagueReports: AgentMessage[],
-): Promise<AgentMessage> {
-  if (!hasLLM()) {
-    return mockBullCase(symbol, snapshot);
+export const BULLISH_STANCE: AgentOpinion["stance"] = "bullish";
+
+export function buildFallbackBullOpinion(input: ThesisAgentInput): AgentOpinion {
+  const { symbol, marketAnalysis: ma, newsAnalysis: na, portfolioContext } = input;
+
+  const evidence: AnalysisStatement[] = [
+    observation(`Market analysis states: "${ma.supportingObservations[0]?.statement ?? "insufficient_data"}"`),
+    observation(`Market labels: trend "${ma.trend}", momentum "${ma.momentum}", volatility regime "${ma.volatilityRegime}"`),
+  ];
+  if (na.catalysts.length > 0) {
+    evidence.push(observation(`News catalyst on record: "${na.catalysts[0].statement}"`));
   }
-  const { output } = await generateText({
-    model: getModel(),
-    system: SYSTEM,
-    prompt: buildPrompt(symbol, snapshot, colleagueReports),
-    output: Output.object({ schema: AgentMessageSchema }),
+  evidence.push(observation(`Aggregate provided news sentiment: ${na.sentiment}`));
+
+  const arguments_: AnalysisStatement[] = [];
+  if (ma.trend === "up" && (ma.momentum === "positive" || ma.momentum === "strongly_positive")) {
+    arguments_.push(interpretation("Trend and momentum labels align, supporting continued upside participation"));
+  }
+  if (na.sentiment >= 0.15) {
+    arguments_.push(interpretation("Provided news flow skews constructive, backing the demand narrative"));
+  }
+  if (ma.volatilityRegime !== "high") {
+    arguments_.push(interpretation("Contained volatility favors defined-risk upside structures"));
+  }
+  if (arguments_.length === 0) {
+    arguments_.push(
+      interpretation("Even under thin conditions, the provided evidence does not preclude a constructive outcome"),
+    );
+  }
+
+  const risks: AnalysisStatement[] = [
+    ...ma.potentialConcerns.map((c) => interpretation(`Market analysis itself cautions: ${c.statement}`)),
+    ...na.negativeFactors.map((n) => interpretation(`News coverage carries a headwind: ${n.statement}`)),
+  ];
+  const sector = sectorForSymbol(symbol, ma.sector, portfolioContext);
+  const exposurePct = exposurePctForSector(portfolioContext, sector);
+  if ((exposurePct ?? 0) >= 25) {
+    risks.push(
+      interpretation(
+        `Existing ${sector} book exposure of ${exposurePct}% makes additional concentration a thesis risk`,
+      ),
+    );
+  }
+
+  return AgentOpinionSchema.parse({
+    symbol,
+    stance: BULLISH_STANCE,
+    confidence: clampConfidence(
+      40 +
+        12 * bullishFlags(ma, na) -
+        (hasConflictingEvidence(na) ? 8 : 0) -
+        insufficiencyPenalty(ma, na),
+    ),
+    arguments: arguments_,
+    evidence,
+    risks,
+    keyAssumptions: [
+      `Momentum label "${ma.momentum}" persists over the assessed ${na.timeHorizon} horizon`,
+      `Coverage of information quality "${na.informationQuality}" is representative of the true information environment`,
+      "No adverse material event beyond those provided occurs during the holding period",
+    ],
+    invalidationConditions: [
+      `Market trend label flips away from "${ma.trend}"`,
+      `Aggregate news sentiment falls below the currently provided ${na.sentiment} reading`,
+      "A bearish material event emerges that outweighs the cited catalysts",
+    ],
   });
-  return normalizeAgentMessage({ ...output, role: "bull", stance: "bullish", confidence: normalizeConfidence(output.confidence) });
 }
+
+export function bullishFlags(
+  ma: ThesisAgentInput["marketAnalysis"],
+  na: ThesisAgentInput["newsAnalysis"],
+): number {
+  return (
+    (ma.trend === "up" ? 1 : 0) +
+    (ma.momentum === "positive" || ma.momentum === "strongly_positive" ? 1 : 0) +
+    (na.sentiment >= 0.15 ? 1 : 0)
+  );
+}
+
+export function bearishFlags(
+  ma: ThesisAgentInput["marketAnalysis"],
+  na: ThesisAgentInput["newsAnalysis"],
+): number {
+  return (
+    (ma.trend === "down" ? 1 : 0) +
+    (ma.momentum === "negative" || ma.momentum === "strongly_negative" ? 1 : 0) +
+    (na.sentiment <= -0.15 ? 1 : 0)
+  );
+}
+
+export function hasConflictingEvidence(na: ThesisAgentInput["newsAnalysis"]): boolean {
+  return na.catalysts.length > 0 && na.negativeFactors.length > 0;
+}
+
+export function insufficiencyPenalty(ma: ThesisAgentInput["marketAnalysis"], na: ThesisAgentInput["newsAnalysis"]): number {
+  const sentinels =
+    (ma.trend === "insufficient_data" ? 1 : 0) +
+    (ma.momentum === "insufficient_data" ? 1 : 0) +
+    (na.timeHorizon === "insufficient_data" ? 1 : 0);
+  return 6 * sentinels + (na.informationQuality === "insufficient" ? 10 : 0);
+}
+
+export function clampConfidence(value: number): number {
+  return Math.min(88, Math.max(15, Math.round(value)));
+}
+
+export function buildBullPrompt(input: ThesisAgentInput): string {
+  return `Symbol: ${input.symbol}
+
+MARKET ANALYSIS (verbatim):
+${JSON.stringify(input.marketAnalysis)}
+
+NEWS ANALYSIS (verbatim):
+${JSON.stringify(input.newsAnalysis)}
+${
+  input.portfolioContext
+    ? `
+PORTFOLIO CONTEXT (may inform risk framing; do not invent positions):
+${JSON.stringify(input.portfolioContext)}`
+    : ""
+}
+
+Construct the strongest evidence-based bullish thesis per your rules. Every evidence item must cite the material above.`;
+}
+
+export const bullAgentConfig: StructuredAgentConfig<ThesisAgentInput, AgentOpinion> = {
+  name: "BullAgent",
+  role: "bull",
+  description: "Constructs the strongest evidence-based bullish thesis from the shared analyses",
+  systemPrompt: BULL_SYSTEM,
+  inputSchema: ThesisAgentInputSchema,
+  outputSchema: AgentOpinionSchema,
+  buildPrompt: buildBullPrompt,
+  fallback: buildFallbackBullOpinion,
+  maxAttempts: 2,
+  validate: (output) => {
+    if (output.stance !== BULLISH_STANCE) {
+      throw new Error(`bull agent must take a bullish stance, received "${output.stance}"`);
+    }
+  },
+};
+
+export const bullAgent = new StructuredAgent(bullAgentConfig);
