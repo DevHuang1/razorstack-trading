@@ -11,6 +11,9 @@ import {
   type AgentMessage,
   type MarketSnapshot,
   type OptionsStructure,
+  type OptionInstrument,
+  type EntryExitReasoning,
+  type TradeProposal,
   type PipelineEvent,
 } from "@/lib/contracts/research";
 
@@ -99,6 +102,126 @@ function mockThesis(symbol: string, snapshot: MarketSnapshot, messages: AgentMes
   };
 }
 
+function nextExpiry(daysOut: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + daysOut);
+  return d.toISOString().split("T")[0];
+}
+
+function roundStrike(price: number): number {
+  if (price < 10) return Math.round(price * 10) / 10;
+  if (price < 100) return Math.round(price);
+  return Math.round(price / 5) * 5;
+}
+
+function deriveInstrument(
+  snapshot: MarketSnapshot,
+  structure: OptionsStructure,
+  direction: AIThesis["direction"],
+): OptionInstrument {
+  const expiry = nextExpiry(30);
+  let type: "call" | "put";
+  let strike: number;
+
+  if (structure === "bull_call_spread") {
+    type = "call";
+    strike = roundStrike(snapshot.price * 1.02);
+  } else if (structure === "bear_put_spread") {
+    type = "put";
+    strike = roundStrike(snapshot.price * 0.98);
+  } else if (structure === "long_call") {
+    type = "call";
+    strike = roundStrike(snapshot.price * 1.01);
+  } else if (structure === "long_put") {
+    type = "put";
+    strike = roundStrike(snapshot.price * 0.99);
+  } else if (structure === "protective_put") {
+    type = "put";
+    strike = roundStrike(snapshot.price * 0.95);
+  } else if (structure === "cash_secured_put") {
+    type = "put";
+    strike = roundStrike(snapshot.price * 0.95);
+  } else {
+    type = direction === "BULLISH" ? "call" : "put";
+    strike = roundStrike(snapshot.price);
+  }
+
+  const vol = snapshot.realizedVol30dAnnPct / 100;
+  const timeValue = vol * snapshot.price * Math.sqrt(30 / 365);
+  const intrinsic =
+    type === "call"
+      ? Math.max(0, snapshot.price - strike)
+      : Math.max(0, strike - snapshot.price);
+  const midPrice = Number(Math.max(0.1, intrinsic + timeValue * 0.6).toFixed(2));
+  const halfSpread = Number((midPrice * 0.05).toFixed(2));
+  const bid = Number(Math.max(0.01, midPrice - halfSpread).toFixed(2));
+  const ask = Number((midPrice + halfSpread).toFixed(2));
+
+  return {
+    type,
+    strike,
+    expiry,
+    midPrice,
+    bid,
+    ask,
+    delta: type === "call" ? 0.42 : -0.42,
+    theta: Number((-midPrice * 0.03).toFixed(2)),
+    gamma: Number((0.015 / (vol * 0.8)).toFixed(4)),
+    impliedVolPct: Number((snapshot.realizedVol30dAnnPct + 2).toFixed(1)),
+  };
+}
+
+function deriveEntryExit(snapshot: MarketSnapshot, thesis: AIThesis): EntryExitReasoning {
+  const support = snapshot.sma20;
+
+  let entryCondition: string;
+  let entryLimitPrice: number | undefined;
+
+  if (thesis.direction === "BULLISH") {
+    entryCondition = `Pullback to 20-day MA ($${support.toFixed(2)}) with RSI ${snapshot.rsi14} confirming support`;
+    entryLimitPrice = Number((support * 1.005).toFixed(2));
+  } else if (thesis.direction === "BEARISH") {
+    entryCondition = `Break below 20-day MA ($${support.toFixed(2)}) with RSI ${snapshot.rsi14} confirming distribution`;
+    entryLimitPrice = Number((support * 0.995).toFixed(2));
+  } else {
+    entryCondition = "No trade — insufficient conviction";
+  }
+
+  return {
+    entryCondition,
+    entryLimitPrice,
+    profitTargetPct: thesis.direction === "NEUTRAL" ? undefined : 50,
+    stopLossPct: thesis.direction === "NEUTRAL" ? undefined : 30,
+    timeExit: "Close 30-DTE position by day 15 to minimize theta decay",
+    rationale: `Strategy ${thesis.suggestedStrategy.structure.replace(/_/g, " ")} expresses ${thesis.direction.toLowerCase()} view with defined risk. Entry aligns with 20-day MA support/resistance. Time exit prevents excessive theta erosion in final 2 weeks.`,
+  };
+}
+
+function buildTradeProposal(symbol: string, thesis: AIThesis, snapshot: MarketSnapshot): TradeProposal {
+  const structure = thesis.suggestedStrategy.structure;
+  const instrument =
+    structure === "no_trade"
+      ? deriveInstrument(snapshot, structure, "NEUTRAL")
+      : deriveInstrument(snapshot, structure, thesis.direction);
+  const entryExit = deriveEntryExit(snapshot, thesis);
+  const maxRisk = thesis.suggestedStrategy.estimatedMaxRiskUsd;
+  const maxReward = structure === "no_trade" ? 0 : Number((maxRisk * 1.5).toFixed(2));
+
+  return {
+    symbol: symbol.toUpperCase(),
+    direction: thesis.direction,
+    confidence: thesis.confidence,
+    strategy: structure,
+    instrument,
+    contracts: structure === "no_trade" ? 0 : 2,
+    entryExit,
+    estimatedMaxRiskUsd: maxRisk,
+    estimatedMaxRewardUsd: maxReward,
+    summary: thesis.summary,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 export async function* runResearchPipeline(symbolInput: string): AsyncGenerator<PipelineEvent> {
   const symbol = symbolInput.trim().toUpperCase();
   try {
@@ -151,6 +274,11 @@ export async function* runResearchPipeline(symbolInput: string): AsyncGenerator<
       };
     }
     yield { type: "thesis", thesis };
+
+    yield { type: "status", step: "proposal", detail: "CIO deriving trade proposal" };
+    const proposal = buildTradeProposal(symbol, thesis, snapshot);
+    yield { type: "trade_proposal", proposal };
+
     yield { type: "done" };
   } catch (error) {
     yield {

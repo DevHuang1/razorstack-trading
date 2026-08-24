@@ -69,8 +69,8 @@ function printThesis(thesis) {
     thesis.direction === "BULLISH"
       ? ANSI.green
       : thesis.direction === "BEARISH"
-        ? ANSI.red
-        : ANSI.yellow;
+      ? ANSI.red
+      : ANSI.yellow;
   const strategy = thesis.suggestedStrategy;
   console.log(`\n${"=".repeat(62)}`);
   console.log(`${ANSI.bold}AI THESIS — CIO SYNTHESIS${ANSI.reset}`);
@@ -88,6 +88,55 @@ function printThesis(thesis) {
       `${ANSI.dim} · est. max risk $${strategy.estimatedMaxRiskUsd.toLocaleString()}${ANSI.reset}`,
   );
   console.log(`${ANSI.dim}${wrap(strategy.rationale)}${ANSI.reset}`);
+  console.log("=".repeat(62));
+}
+
+function printTradeProposal(proposal) {
+  const dirColor =
+    proposal.direction === "BULLISH"
+      ? ANSI.green
+      : proposal.direction === "BEARISH"
+      ? ANSI.red
+      : ANSI.yellow;
+  const inst = proposal.instrument;
+  const ex = proposal.entryExit;
+  console.log(`\n${"=".repeat(62)}`);
+  console.log(`${ANSI.bold}TRADE PROPOSAL — machine-readable${ANSI.reset}`);
+  console.log(
+    `${proposal.symbol} — ${dirColor}${ANSI.bold}${proposal.direction}${ANSI.reset} ${dirColor}@ ${proposal.confidence}%${ANSI.reset}` +
+      ` · ${ANSI.cyan}${proposal.strategy.replace(/_/g, " ")}${ANSI.reset}`,
+  );
+
+  console.log(`\n${ANSI.bold}Instrument:${ANSI.reset}`);
+  console.log(
+    `  ${inst.type.toUpperCase()} | strike $${inst.strike.toFixed(2)} | expiry ${inst.expiry}` +
+      ` | mid $${inst.midPrice.toFixed(2)} (bid $${inst.bid.toFixed(2)} / ask $${inst.ask.toFixed(2)})`,
+  );
+  console.log(
+    `  ${ANSI.dim}Δ ${inst.delta.toFixed(2)} · Γ ${inst.gamma.toFixed(4)} · Θ ${inst.theta.toFixed(2)} · IV ${inst.impliedVolPct}%${ANSI.reset}`,
+  );
+  console.log(`  ${ANSI.bold}Contracts:${ANSI.reset} ${proposal.contracts}`);
+
+  console.log(`\n${ANSI.bold}Entry/Exit:${ANSI.reset}`);
+  console.log(`  ${ANSI.green}Entry:${ANSI.reset} ${ex.entryCondition}`);
+  if (ex.entryLimitPrice != null) {
+    console.log(`  ${ANSI.dim}limit ~ $${ex.entryLimitPrice.toFixed(2)}${ANSI.reset}`);
+  }
+  if (ex.profitTargetPct != null) {
+    console.log(`  ${ANSI.green}Profit target:${ANSI.reset} ${ex.profitTargetPct}% of max reward`);
+  }
+  if (ex.stopLossPct != null) {
+    console.log(`  ${ANSI.red}Stop loss:${ANSI.reset} ${ex.stopLossPct}% from entry`);
+  }
+  if (ex.timeExit) {
+    console.log(`  ${ANSI.dim}Time exit:${ANSI.reset} ${ex.timeExit}`);
+  }
+
+  console.log(
+    `\n${ANSI.green}Est. max risk:${ANSI.reset} $${proposal.estimatedMaxRiskUsd.toLocaleString()}` +
+      `  ·  ${ANSI.yellow}Est. max reward:${ANSI.reset} $${proposal.estimatedMaxRewardUsd.toLocaleString()}`,
+  );
+  console.log(`${ANSI.dim}${wrap(ex.rationale)}${ANSI.reset}`);
   console.log("=".repeat(62));
 }
 
@@ -132,6 +181,9 @@ async function main() {
           break;
         case "thesis":
           printThesis(event.thesis);
+          break;
+        case "trade_proposal":
+          printTradeProposal(event.proposal);
           break;
         case "error":
           console.error(`${ANSI.red}ERROR [${event.step}]: ${event.message}${ANSI.reset}`);

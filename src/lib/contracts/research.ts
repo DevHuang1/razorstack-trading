@@ -74,6 +74,45 @@ export const AIThesisSchema = z.object({
 });
 export type AIThesis = z.infer<typeof AIThesisSchema>;
 
+export const OptionInstrumentSchema = z.object({
+  type: z.enum(["call", "put"]),
+  strike: z.number().positive(),
+  expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  midPrice: z.number().positive(),
+  bid: z.number().min(0),
+  ask: z.number().min(0),
+  delta: z.number().min(-1).max(1),
+  theta: z.number(),
+  gamma: z.number().nonnegative(),
+  impliedVolPct: z.number().min(0),
+});
+export type OptionInstrument = z.infer<typeof OptionInstrumentSchema>;
+
+export const EntryExitReasoningSchema = z.object({
+  entryCondition: z.string(),
+  entryLimitPrice: z.number().positive().optional(),
+  profitTargetPct: z.number().positive().optional(),
+  stopLossPct: z.number().positive().optional(),
+  timeExit: z.string().optional(),
+  rationale: z.string(),
+});
+export type EntryExitReasoning = z.infer<typeof EntryExitReasoningSchema>;
+
+export const TradeProposalSchema = z.object({
+  symbol: z.string(),
+  direction: z.enum(["BULLISH", "BEARISH", "NEUTRAL"]),
+  confidence: z.number().min(0).max(100),
+  strategy: OptionsStructureSchema,
+  instrument: OptionInstrumentSchema,
+  contracts: z.number().int().nonnegative(),
+  entryExit: EntryExitReasoningSchema,
+  estimatedMaxRiskUsd: z.number().nonnegative(),
+  estimatedMaxRewardUsd: z.number().nonnegative(),
+  summary: z.string(),
+  generatedAt: z.string(),
+});
+export type TradeProposal = z.infer<typeof TradeProposalSchema>;
+
 export const ResearchContextSchema = z.object({
   snapshot: MarketSnapshotSchema,
   news: z.array(NewsItemSchema),
@@ -85,5 +124,6 @@ export type PipelineEvent =
   | { type: "context"; snapshot: MarketSnapshot; newsCount: number }
   | { type: "agent_message"; message: AgentMessage }
   | { type: "thesis"; thesis: AIThesis }
+  | { type: "trade_proposal"; proposal: TradeProposal }
   | { type: "error"; step: string; message: string }
   | { type: "done" };
