@@ -1,0 +1,15 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:///./trading_dev.db
+    volumes:
+      - backend-data:/app
+    restart: unless-stopped
+
+volumes:
+  backend-data:
