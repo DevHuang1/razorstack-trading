@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpaca AI Trading — Live Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --green: #3fb950; --red: #f85149;
+    --blue: #58a6ff; --amber: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 14px 22px;
+           border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; }
+  .chip { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+  .chip.ok { color: var(--green); border-color: var(--green); }
+  .chip.halt { color: var(--red); border-color: var(--red); }
+  .ws { margin-left: auto; }
+  main { padding: 18px 22px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+               margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 14px; }
+  .card { min-width: 130px; flex: 1; background: var(--bg); border: 1px solid var(--border);
+          border-radius: 8px; padding: 10px 12px; }
+  .card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .card .v { font-size: 19px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 14px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  .pos-pnl { color: var(--green); } .neg-pnl { color: var(--red); }
+  .st-FILLED { color: var(--green); } .st-CANCELED { color: var(--muted); }
+  .st-SUBMITTED, .st-PENDING, .st-PARTIALLY_FILLED { color: var(--amber); }
+  .st-REJECTED, .st-FAILED { color: var(--red); }
+  .feed { max-height: 340px; overflow-y: auto; }
+  .ev { display: flex; gap: 10px; padding: 6px 14px; border-bottom: 1px solid var(--border); align-items: baseline; }
+  .ev:last-child { border-bottom: none; }
+  .ev time { color: var(--muted); font-size: 11px; flex: none; }
+  .ev .t { flex: none; font-weight: 600; width: 150px; font-size: 12px; }
+  .t.trade { color: var(--blue); } .t.risk-ok { color: var(--green); } .t.risk-bad { color: var(--red); }
+  .t.order { color: var(--amber); } .t.info { color: var(--muted); }
+  .ev pre { margin: 0; color: var(--text); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  footer { padding: 4px 22px 20px; color: var(--muted); font-size: 12px; }
+  code { background: var(--panel); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Alpaca AI Trading</h1>
+  <span class="chip" id="mode">…</span>
+  <span class="chip" id="restricted">risk ok</span>
+  <span class="chip ws" id="ws-state">WS connecting…</span>
+</header>
+
+<main>
+  <section>
+    <h2>Account</h2>
+    <div class="cards">
+      <div class="card"><div class="k">Equity</div><div class="v" id="equity">—</div></div>
+      <div class="card"><div class="k">Cash</div><div class="v" id="cash">—</div></div>
+      <div class="card"><div class="k">Total P&amp;L</div><div class="v" id="pnl">—</div></div>
+      <div class="card"><div class="k">Drawdown</div><div class="v" id="dd">—</div></div>
+      <div class="card"><div class="k">Risk score</div><div class="v" id="score">—</div></div>
+    </div>
+    <table id="positions"><thead><tr>
+      <th>Symbol</th><th>Sector</th><th>Qty</th><th>Avg</th><th>Price</th><th>Value</th><th>P&amp;L</th><th>Weight</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Orders</h2>
+    <table id="orders"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Filled</th><th>Avg px</th><th>Status</th><th>Type</th>
+    </tr></thead><tbody></tbody></table>
+
+    <h2 style="margin-top:14px">Proposals</h2>
+    <table id="proposals"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Agent</th><th>Conf.</th><th>Status</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section style="grid-column: 1 / -1;">
+    <h2>Event stream <span style="float:right;text-transform:none;letter-spacing:0">(live via WebSocket)</span></h2>
+    <div class="feed" id="feed"></div>
+  </section>
+</main>
+<footer>
+  Try it: <code>POST /trades/propose</code> · <code>POST /admin/tick</code> ·
+  <code>POST /admin/reset</code> · full docs at <code>/docs</code>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n, d = 2) => (n ?? 0).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n) => fmt((n ?? 0) * 100) + "%";
+const cls = (v) => v >= 0 ? "pos-pnl" : "neg-pnl";
+
+function fill(id, items, build) {
+  const tb = $(id).querySelector("tbody");
+  tb.replaceChildren();
+  for (const it of items) {
+    const tr = document.createElement("tr");
+    for (const cell of build(it)) {
+      const td = document.createElement("td");
+      if (cell instanceof Node) td.append(cell); else td.textContent = cell ?? "—";
+      tr.append(td);
+    }
+    tb.append(tr);
+  }
+}
+
+async function refresh() {
+  try {
+    const [pf, risk, orders, proposals] = await Promise.all([
+      fetch("/portfolio").then(r => r.json()),
+      fetch("/risk/status").then(r => r.json()),
+      fetch("/orders?limit=8").then(r => r.json()),
+      fetch("/trades/proposals?limit=6").then(r => r.json()),
+    ]);
+    $("mode").textContent = pf.timestamp ? `broker: ${risk.broker_mode}` : "";
+    $("mode").textContent = `broker: ${risk.broker_mode}`;
+    $("restricted").textContent = risk.restricted_mode ? `HALTED: ${risk.restrictions.join(", ")}` : "risk ok";
+    $("restricted").className = "chip " + (risk.restricted_mode ? "halt" : "ok");
+    $("equity").textContent = "$" + fmt(pf.equity);
+    $("cash").textContent = "$" + fmt(pf.cash);
+    $("pnl").textContent = (pf.total_pnl >= 0 ? "+$" : "-$") + fmt(Math.abs(pf.total_pnl));
+    $("pnl").className = "v " + cls(pf.total_pnl);
+    $("dd").textContent = pct(pf.drawdown);
+    $("score").textContent = fmt(pf.risk_score, 3);
+
+    fill("positions", pf.positions, (p) => [
+      p.symbol, p.sector, p.quantity, fmt(p.avg_entry_price), fmt(p.current_price),
+      "$" + fmt(p.market_value), span((p.unrealized_pnl >= 0 ? "+" : "") + fmt(p.unrealized_pnl), cls(p.unrealized_pnl)), pct(p.weight),
+    ]);
+    fill("orders", orders, (o) => [
+      o.symbol,
+      span(o.side.toUpperCase(), o.side === "buy" ? "pos-pnl" : "neg-pnl"),
+      o.quantity, o.filled_quantity, o.avg_fill_price != null ? fmt(o.avg_fill_price) : "",
+      span(o.status, "st-" + o.status), o.order_type,
+    ]);
+    fill("proposals", proposals, (p) => [
+      p.symbol,
+      span(p.side.toUpperCase(), p.side === "buy" ? "pos-pnl" : "neg-pnl"),
+      p.quantity, p.agent_id, fmt(p.confidence, 2),
+      span(p.status, p.status === "EXECUTED" || p.status === "APPROVED" ? "st-FILLED"
+          : p.status === "REJECTED" ? "st-REJECTED" : "st-SUBMITTED"),
+    ]);
+  } catch (err) { console.error(err); }
+}
+
+function addEvent(ev) {
+  const feed = $("feed");
+  const row = document.createElement("div"); row.className = "ev";
+  const t = document.createElement("time"); t.textContent = new Date(ev.timestamp).toLocaleTimeString(); 
+  const kind = document.createElement("span");
+  kind.className = "t " + (ev.event_type.startsWith("TRADE_REJ") || ev.event_type.includes("FAILED") ? "risk-bad"
+                     : ev.event_type.startsWith("TRADE_APP") || ev.event_type === "ORDER_FILLED" ? "risk-ok"
+                     : ev.event_type.startsWith("ORDER") ? "order"
+                     : ev.event_type.startsWith("TRADE") ? "trade" : "info");
+  kind.textContent = ev.event_type;
+  const payload = document.createElement("pre"); payload.textContent = JSON.stringify(ev.payload);
+  row.append(t, kind, payload);
+  feed.prepend(row);
+  while (feed.children.length > 80) feed.lastChild.remove();
+}
+
+function connectWS() {
+  const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  const ws = new WebSocket(proto + location.host + "/events/ws");
+  ws.onopen = () => { $("ws-state").textContent = "WS live"; $("ws-state").className = "chip ws ok"; };
+  ws.onmessage = (m) => { try { addEvent(JSON.parse(m.data)); } catch {} };
+  ws.onclose = () => {
+    $("ws-state").textContent = "WS offline"; $("ws-state").className = "chip ws halt";
+    setTimeout(connectWS, 2000);
+  };
+}
+
+refresh();
+setInterval(refresh, 3000);
+connectWS();
+fetch("/events?limit=15").then(r => r.json()).then(list => list.reverse().forEach(addEvent)).catch(() => {});
+</script>
+</body>
+</html>
