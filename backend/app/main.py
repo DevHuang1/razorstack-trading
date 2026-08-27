@@ -15,12 +15,14 @@ from fastapi.responses import JSONResponse
 
 from app.api import (
     routes_admin,
+    routes_agents,
     routes_dashboard,
     routes_events,
     routes_health,
     routes_market,
     routes_orders,
     routes_portfolio,
+    routes_quant,
     routes_risk,
     routes_trades,
 )
@@ -168,11 +170,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     for router in (
         routes_dashboard.router,
+        routes_agents.router,
         routes_health.router,
         routes_trades.router,
         routes_orders.router,
-        routes_portfolio.router,
         routes_market.router,
+        routes_portfolio.router,
+        routes_quant.router,
         routes_risk.router,
         routes_events.router,
         routes_admin.router,

@@ -1,7 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { MarketRegime, QuantSignal, SignalResponse } from "@/lib/quant/types";
+import { recordSignal } from "@/lib/quant/paper";
+import { listStrategies } from "@/lib/quant/strategies";
+import type {
+  LeaderboardEntry,
+  PaperRecord,
+} from "@/lib/quant/paper";
+import type { MarketRegime, QuantSignal, SignalResponse, StrategyId } from "@/lib/quant/types";
+
+type StrategyPerformance = {
+  strategyId: string;
+  horizonDays: number;
+  signalsEvaluated: number;
+  trades: number;
+  winRatePct: number;
+  avgTradeReturnPct: number;
+  grossCumulativeReturnPct: number;
+  netCumulativeReturnPct: number;
+  maxDrawdownPct: number;
+  sharpeAnnualized: number | null;
+  sortinoAnnualized: number | null;
+  calmarRatio: number | null;
+  turnover: number;
+  exposurePct: number;
+  buyHoldReturnPct: number;
+  benchmarkOutperformancePct: number;
+  avgCostPerTradeBps: number;
+};
 
 const DIRECTION_STYLES: Record<string, string> = {
   BUY: "text-emerald-400",
@@ -50,6 +76,202 @@ function RegimeBadge({ regime }: { regime: MarketRegime }) {
   );
 }
 
+function PaperPanel() {
+  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [records, setRecords] = useState<PaperRecord[]>([]);
+
+  const refresh = useCallback(() => {
+    fetch("/api/quant/leaderboard")
+      .then((r) => r.json() as Promise<{ entries: LeaderboardEntry[] }>)
+      .then((json) => setEntries(json.entries));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  useEffect(() => {
+    (async () => {
+      const mod = await import("@/lib/quant/paper");
+      setRecords(mod.listPaperRecords());
+    })();
+  }, [entries]);
+
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+      <h2 className="mb-4 text-lg font-semibold tracking-tight">Paper tracker & leaderboard</h2>
+
+      <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
+        <span className="font-medium text-zinc-300">Tracked signals:</span> {records.length}
+        {records.length > 0 && (
+          <ul className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-2">
+            {records.slice(-6).reverse().map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2">
+                <span>
+                  {r.symbol} · {r.strategy} · {r.direction}
+                </span>
+                <span className="font-mono">
+                  {r.realizedReturn === null
+                    ? "open"
+                    : `${(r.realizedReturn * 100).toFixed(1)}%`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="text-sm text-zinc-500">No resolved trades yet. Log signals to the paper
+          tracker and they will appear here.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs text-zinc-500">
+              <tr>
+                <th className="pb-2">Strategy</th>
+                <th className="pb-2">Trades</th>
+                <th className="pb-2">Win rate</th>
+                <th className="pb-2">Avg ret</th>
+                <th className="pb-2">Cum ret</th>
+                <th className="pb-2">Max DD</th>
+                <th className="pb-2">Sharpe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.strategy} className="border-t border-zinc-800">
+                  <td className="py-2 font-medium">{e.strategy}</td>
+                  <td className="py-2 font-mono text-zinc-400">{e.total}</td>
+                  <td className="py-2 font-mono text-zinc-400">{e.winRatePct}%</td>
+                  <td className="py-2 font-mono text-zinc-400">{e.avgReturnPct}%</td>
+                  <td className="py-2 font-mono font-medium text-emerald-400">
+                    {e.cumulativeReturnPct}%
+                  </td>
+                  <td className="py-2 font-mono text-rose-400">-{e.maxDrawdownPct}%</td>
+                  <td className="py-2 font-mono text-zinc-400">{e.sharpeAnnualized ?? "n/a"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const STRATEGY_OPTIONS = listStrategies().map((s) => ({
+  id: s.id,
+  name: s.name,
+}));
+
+function BacktestPanel() {
+  const [strategy, setStrategy] = useState<StrategyId>("MOMENTUM");
+  const [symbol, setSymbol] = useState("NVDA");
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<StrategyPerformance | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [walkForward, setWalkForward] = useState(false);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/quant/backtest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strategy, symbol: symbol.toUpperCase(), walkForward }),
+      });
+      const json = (await res.json()) as StrategyPerformance | { error: string };
+      if (!res.ok || "error" in json) {
+        throw new Error(
+          "error" in json ? json.error : `API returned ${res.status}`,
+        );
+      }
+      setResult(json as StrategyPerformance);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Backtest failed");
+      setResult(null);
+    } finally {
+      setRunning(false);
+    }
+  }, [strategy, symbol, walkForward]);
+
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+      <h2 className="mb-4 text-lg font-semibold tracking-tight">Backtest (net of costs)</h2>
+
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          Strategy
+          <select
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value as StrategyId)}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+          >
+            {STRATEGY_OPTIONS.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          Symbol
+          <input
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 font-mono text-sm"
+          />
+        </label>
+        <label className="flex items-center gap-2 pb-2 text-xs text-zinc-400">
+          <input
+            type="checkbox"
+            checked={walkForward}
+            onChange={(e) => setWalkForward(e.target.checked)}
+          />
+          walk-forward
+        </label>
+        <button
+          onClick={run}
+          disabled={running}
+          className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50"
+        >
+          {running ? "Running…" : "Run backtest"}
+        </button>
+      </div>
+
+      {error && <p className="mb-3 text-sm text-rose-400">{error}</p>}
+
+      {result && (
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <Metric label="Net return (cumm.)" value={`${result.netCumulativeReturnPct}%`} tone="good" />
+          <Metric label="Gross / net spread" value={`${result.grossCumulativeReturnPct}% → ${result.netCumulativeReturnPct}%`} />
+          <Metric label="Trades / decisions" value={`${result.trades} / ${result.signalsEvaluated}`} />
+          <Metric label="Win rate" value={`${result.winRatePct}%`} />
+          <Metric label="Avg trade (net)" value={`${result.avgTradeReturnPct}%`} />
+          <Metric label="Max drawdown" value={`-${result.maxDrawdownPct}%`} tone="bad" />
+          <Metric label="Sharpe (ann.)" value={result.sharpeAnnualized?.toFixed(2) ?? "n/a"} />
+          <Metric label="Sortino (ann.)" value={result.sortinoAnnualized?.toFixed(2) ?? "n/a"} />
+          <Metric label="Calmar" value={result.calmarRatio?.toFixed(2) ?? "n/a"} />
+          <Metric label="Turnover" value={result.turnover.toFixed(3)} />
+          <Metric label="Exposure" value={`${result.exposurePct}%`} />
+          <Metric label="Cost / trade" value={`${result.avgCostPerTradeBps} bps`} />
+          <Metric label="Buy & hold" value={`${result.buyHoldReturnPct}%`} />
+          <Metric label="vs benchmark" value={`${result.benchmarkOutperformancePct}%`} tone={result.benchmarkOutperformancePct >= 0 ? "good" : "bad"} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone?: "good" | "bad" }) {
+  const toneClass =
+    tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-rose-400" : "text-zinc-300";
+  return (
+    <div>
+      <dt className="text-zinc-500">{label}</dt>
+      <dd className={`font-mono ${toneClass}`}>{value}</dd>
+    </div>
+  );
+}
+
 function SignalCard({ signal }: { signal: QuantSignal }) {
   return (
     <section className={`rounded-xl border p-5 ${DIRECTION_BG[signal.overall.direction]}`}>
@@ -69,8 +291,17 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
             {signal.overall.direction}
           </span>
           <span className="ml-3 font-mono text-lg">{signal.overall.strength}%</span>
+          <span className="ml-3 font-mono text-xs text-zinc-400">
+            conf {(signal.overall.confidence * 100).toFixed(0)}%
+          </span>
         </div>
       </header>
+
+      {signal.dataQuality && !signal.dataQuality.isActionable && (
+        <div className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200">
+          data quality: {signal.dataQuality.warnings.join(", ") || "warnings"}
+        </div>
+      )}
 
       <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
         {signal.components.map((c) => (
@@ -124,12 +355,57 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
           </dd>
         </div>
         <div>
-          <dt className="text-zinc-500">Sharpe (20d)</dt>
+          <dt className="text-zinc-500">Sharpe (ann.)</dt>
           <dd className="font-mono text-zinc-300">
-            {signal.riskMetrics.sharpe20d ?? "n/a"}
+            {signal.riskMetrics.sharpeAnnualized ?? "n/a"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Tail index (Hill)</dt>
+          <dd className="font-mono text-zinc-300">
+            {signal.riskMetrics.tail.tailIndex ?? "n/a"}
+            {signal.riskMetrics.tail.fatTail ? " (fat)" : ""}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">99% VaR (Gauss/Hill)</dt>
+          <dd className="font-mono text-zinc-300">
+            {signal.riskMetrics.tail.gaussianVaR ?? "n/a"} /{" "}
+            {signal.riskMetrics.tail.nonGaussianVaR ?? "n/a"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Risk budget</dt>
+          <dd className="font-mono text-zinc-300">
+            {signal.riskChecks.riskBudgetPct ?? "n/a"}%
+          </dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Stop dist. (2×ATR)</dt>
+          <dd className="font-mono text-zinc-300">
+            {signal.riskChecks.stopDistancePct ?? "n/a"}%
           </dd>
         </div>
       </dl>
+
+      <div className="mt-4 flex justify-end">
+        <button
+          onClick={() =>
+            recordSignal({
+              symbol: signal.symbol,
+              strategy: signal.overall.direction === "HOLD" ? "TREND" : "MOMENTUM",
+              modelVersion: signal.riskChecks.modelVersion,
+              timeframe: signal.timeframe,
+              horizonDays: 5,
+              entryPrice: signal.price,
+              direction: signal.overall.direction,
+            })
+          }
+          className="rounded-md border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:border-emerald-500/50 hover:text-emerald-300"
+        >
+          Log to paper tracker
+        </button>
+      </div>
     </section>
   );
 }
@@ -219,6 +495,11 @@ export default function QuantDeskPage() {
 
       <div className="space-y-5">
         {data?.signals.map((s) => <SignalCard key={s.symbol} signal={s} />)}
+      </div>
+
+      <div className="mt-8 space-y-5">
+        <BacktestPanel />
+        <PaperPanel />
       </div>
     </main>
   );

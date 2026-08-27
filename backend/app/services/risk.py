@@ -9,6 +9,8 @@ import logging
 import math
 
 from app.integrations.base import BrokerService
+from app.quant.execution_costs import estimate_execution_cost
+from app.schemas.quant import ExecutionCostRequest
 from app.schemas.risk import RiskDecisionStatus, RiskResult
 from app.schemas.trade import TradeProposal
 from app.services.portfolio import PortfolioService
@@ -83,12 +85,23 @@ class RiskEngine:
             )
 
         notional = price * proposal.quantity
+        requested_cost = estimate_execution_cost(
+            ExecutionCostRequest(
+                symbol=proposal.symbol,
+                side=proposal.side.value,
+                quantity=proposal.quantity,
+                reference_price=price,
+                order_type=proposal.order_type.value,
+            ),
+            self.settings,
+        )
         details["reference_price"] = round(price, 4)
         details["requested_notional"] = round(notional, 2)
+        details["execution_cost"] = requested_cost.model_dump()
 
         # ---- sells reduce exposure ---------------------------------------
         if proposal.side.value == "sell":
-            details["post_trade_cash"] = round(cash + notional, 2)
+            details["post_trade_cash"] = round(cash + requested_cost.sell_net_proceeds, 2)
             return RiskResult(
                 status=RiskDecisionStatus.APPROVED,
                 reason="sell reduces exposure; approved",
@@ -109,12 +122,19 @@ class RiskEngine:
         sector_cap = limits.max_sector_exposure_percent * equity
         cash_floor = limits.min_cash_percent * equity
 
-        constraints = {
-            CODE_POSITION_CAP: position_cap - symbol_value,
-            CODE_SECTOR_CAP: sector_cap - sector_value,
-            CODE_INSUFFICIENT_CASH: cash - cash_floor,
+        max_position_qty = math.floor(max(position_cap - symbol_value, 0.0) / price)
+        max_sector_qty = math.floor(max(sector_cap - sector_value, 0.0) / price)
+        max_cash_qty = self._max_cash_quantity(
+            proposal=proposal,
+            price=price,
+            cash_available=max(cash - cash_floor, 0.0),
+        )
+        quantity_limits = {
+            CODE_POSITION_CAP: max_position_qty,
+            CODE_SECTOR_CAP: max_sector_qty,
+            CODE_INSUFFICIENT_CASH: max_cash_qty,
         }
-        binding_code, allowed_notional = min(constraints.items(), key=lambda kv: kv[1])
+        binding_code, allowed_qty = min(quantity_limits.items(), key=lambda kv: kv[1])
 
         details.update(
             {
@@ -127,22 +147,29 @@ class RiskEngine:
             }
         )
 
-        if allowed_notional < notional:
-            affordable = math.floor(max(allowed_notional, 0.0) / price) if price > 0 else 0
-            approved_qty = min(proposal.quantity, affordable)
-        else:
-            approved_qty = proposal.quantity
+        approved_qty = min(proposal.quantity, max(0, allowed_qty))
 
         if approved_qty <= 0:
             reason = _REJECT_REASONS.get(binding_code, binding_code.lower())
             return self._reject(binding_code, reason, proposal.quantity, metrics, details)
 
+        approved_cost = estimate_execution_cost(
+            ExecutionCostRequest(
+                symbol=proposal.symbol,
+                side=proposal.side.value,
+                quantity=approved_qty,
+                reference_price=price,
+                order_type=proposal.order_type.value,
+            ),
+            self.settings,
+        )
         post_symbol = symbol_value + approved_qty * price
         post_sector = sector_value + approved_qty * price
-        post_cash = cash - approved_qty * price
+        post_cash = cash - approved_cost.buy_cash_required
         details.update(
             {
                 "approved_notional": round(approved_qty * price, 2),
+                "approved_execution_cost": approved_cost.model_dump(),
                 "post_trade_symbol_exposure_pct": round(post_symbol / equity, 4) if equity > 0 else 0.0,
                 "post_trade_sector_exposure_pct": round(post_sector / equity, 4) if equity > 0 else 0.0,
                 "post_trade_cash": round(post_cash, 2),
@@ -173,6 +200,29 @@ class RiskEngine:
         )
 
     # ---------------------------------------------------------------- helpers
+    def _max_cash_quantity(self, *, proposal: TradeProposal, price: float, cash_available: float) -> int:
+        """Find the largest buy quantity whose all-in estimate fits the cash floor."""
+        if proposal.side.value != "buy" or cash_available <= 0:
+            return 0
+        low, high = 0, proposal.quantity
+        while low < high:
+            candidate = (low + high + 1) // 2
+            estimate = estimate_execution_cost(
+                ExecutionCostRequest(
+                    symbol=proposal.symbol,
+                    side="buy",
+                    quantity=candidate,
+                    reference_price=price,
+                    order_type=proposal.order_type.value,
+                ),
+                self.settings,
+            )
+            if estimate.buy_cash_required <= cash_available + 1e-9:
+                low = candidate
+            else:
+                high = candidate - 1
+        return low
+
     async def _reference_price(self, proposal: TradeProposal) -> float:
         if proposal.limit_price is not None:
             return float(proposal.limit_price)

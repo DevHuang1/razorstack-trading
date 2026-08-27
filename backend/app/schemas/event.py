@@ -21,6 +21,7 @@ class EventType(str, Enum):
     POSITION_UPDATED = "POSITION_UPDATED"
     RISK_ALERT = "RISK_ALERT"
     CRISIS_DETECTED = "CRISIS_DETECTED"
+    AGENT_STATUS = "AGENT_STATUS"
 
 
 class TradeEvent(BaseModel):

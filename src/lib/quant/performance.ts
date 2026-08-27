@@ -1,20 +1,41 @@
 import type { Bar, StrategyId } from "./types";
-import { drawdownStats, round, stdev } from "./indicators";
+import { drawdownStats, round, sharpeRatio, sortinoRatio } from "./indicators";
 import { getStrategy } from "./strategies";
+import { estimateExecutionCost } from "./executionCosts";
 
 export interface StrategyPerformance {
   strategyId: StrategyId;
   horizonDays: number;
   signalsEvaluated: number;
+  trades: number;
   winRatePct: number;
   avgTradeReturnPct: number;
-  cumulativeReturnPct: number;
+  grossCumulativeReturnPct: number;
+  netCumulativeReturnPct: number;
   maxDrawdownPct: number;
   sharpeAnnualized: number | null;
+  sortinoAnnualized: number | null;
+  calmarRatio: number | null;
+  turnover: number;
+  exposurePct: number;
+  buyHoldReturnPct: number;
+  benchmarkOutperformancePct: number;
+  avgCostPerTradeBps: number;
 }
 
 export interface BacktestOptions {
   horizonDays?: number;
+  initialCapital?: number;
+  maxNotionalWeight?: number;
+  trainWindow?: number;
+}
+
+const DEFAULT_MAX_NOTIONAL_WEIGHT = 1;
+
+interface TradeRecord {
+  forwardReturnNet: number;
+  costFraction: number;
+  entryBar: number;
 }
 
 export function backtestStrategy(
@@ -23,59 +44,169 @@ export function backtestStrategy(
   options: BacktestOptions = {},
 ): StrategyPerformance | null {
   const strategy = getStrategy(strategyId);
-  if (!strategy || bars.length < 120) return null;
+  if (!strategy || bars.length < Math.max(strategy.minBars + 10, 120)) return null;
 
   const horizon = options.horizonDays ?? 5;
-  const tradeReturns: number[] = [];
-  let equity = 1;
+  const maxWeight = options.maxNotionalWeight ?? DEFAULT_MAX_NOTIONAL_WEIGHT;
+  const initialCapital = options.initialCapital ?? 100_000;
 
-  for (let i = 80; i < bars.length - horizon; ) {
-    const history = bars.slice(0, i + 1);
-    const v = strategy.evaluate(history);
-    const forward = (bars[i + horizon].c - bars[i].c) / bars[i].c;
-    if (v.direction === "BUY") {
-      tradeReturns.push(forward);
-      equity *= 1 + forward;
-      i += horizon;
-    } else if (v.direction === "SELL") {
-      tradeReturns.push(-forward);
-      equity *= 1 - forward;
-      i += horizon;
-    } else {
-      i += 1;
-    }
-  }
+  const start = Math.max(strategy.minBars, 60);
+  const end = bars.length - horizon;
 
-  if (tradeReturns.length === 0) {
-    return {
-      strategyId,
-      horizonDays: horizon,
-      signalsEvaluated: 0,
-      winRatePct: 0,
-      avgTradeReturnPct: 0,
-      cumulativeReturnPct: 0,
-      maxDrawdownPct: 0,
-      sharpeAnnualized: null,
-    };
-  }
+  return run(start, end, horizon, maxWeight, initialCapital, strategyId, bars);
+}
 
-  const wins = tradeReturns.filter((r) => r > 0).length;
-  const avg = tradeReturns.reduce((a, b) => a + b, 0) / tradeReturns.length;
-  const sd = stdev(tradeReturns);
-  const sharpe =
-    sd > 0 ? (avg / sd) * Math.sqrt(252 / horizon) : null;
-  const dd = drawdownStats(tradeReturns.map((_, i) =>
-    tradeReturns.slice(0, i + 1).reduce((a, b) => a + b, 0) + 1,
-  ));
+export interface WalkForwardResult {
+  strategyId: StrategyId;
+  horizonDays: number;
+  trainWindow: number;
+  testWindow: number;
+  performance: StrategyPerformance;
+}
+
+export function walkForwardBacktest(
+  strategyId: StrategyId,
+  bars: Bar[],
+  options: BacktestOptions = {},
+): WalkForwardResult | null {
+  const strategy = getStrategy(strategyId);
+  if (!strategy || bars.length < 200) return null;
+
+  const horizon = options.horizonDays ?? 5;
+  const maxWeight = options.maxNotionalWeight ?? DEFAULT_MAX_NOTIONAL_WEIGHT;
+  const initialCapital = options.initialCapital ?? 100_000;
+  const trainWindow = options.trainWindow ?? Math.floor(bars.length * 0.5);
+
+  const start = Math.max(strategy.minBars, trainWindow);
+  const end = bars.length - horizon;
+
+  const performance = run(start, end, horizon, maxWeight, initialCapital, strategyId, bars);
 
   return {
     strategyId,
     horizonDays: horizon,
-    signalsEvaluated: tradeReturns.length,
-    winRatePct: round((wins / tradeReturns.length) * 100, 1),
-    avgTradeReturnPct: round(avg * 100, 2),
-    cumulativeReturnPct: round((equity - 1) * 100, 2),
+    trainWindow,
+    testWindow: Math.max(0, end - start),
+    performance,
+  };
+}
+
+function run(
+  start: number,
+  end: number,
+  horizon: number,
+  maxWeight: number,
+  initialCapital: number,
+  strategyId: StrategyId,
+  bars: Bar[],
+): StrategyPerformance {
+  const trades: TradeRecord[] = [];
+  const decisionCount = Math.max(0, end - start);
+  let capital = initialCapital;
+  let netCumulative = 0;
+  let totalCostFraction = 0;
+
+  for (let i = start; i < end; i++) {
+    const history = bars.slice(0, i + 1);
+    const vote = getStrategy(strategyId)!.evaluate(history);
+    const entry = bars[i].c;
+    const exit = bars[i + horizon].c;
+    if (entry <= 0) continue;
+
+    const rawForward = exit / entry - 1;
+    let direction: 1 | -1 | 0 = 0;
+    if (vote.direction === "BUY") direction = 1;
+    else if (vote.direction === "SELL") direction = -1;
+    if (direction === 0) continue;
+
+    const notional = capital * maxWeight;
+    const qty = Math.max(1, Math.round(notional / entry));
+    const cost = estimateExecutionCost({
+      symbol: strategyId,
+      side: direction === 1 ? "buy" : "sell",
+      quantity: qty,
+      referencePrice: entry,
+      averageDailyVolume: null,
+    });
+    const costFraction = cost.costAsFractionOfNotional;
+
+    const net = direction * rawForward - costFraction;
+    const capitalDelta = net * notional;
+    capital += capitalDelta;
+    netCumulative += net;
+    totalCostFraction += costFraction;
+
+    trades.push({ forwardReturnNet: net, costFraction, entryBar: i });
+  }
+
+  const startPrice = bars[0]?.c ?? 0;
+  const endPrice = bars[bars.length - 1]?.c ?? 0;
+  const buyHold = startPrice > 0 ? endPrice / startPrice - 1 : 0;
+
+  const grossAvg =
+    trades.length > 0
+      ? trades.reduce((a, t) => a + t.forwardReturnNet + t.costFraction, 0) /
+        trades.length
+      : 0;
+
+  const compoundedNet = initialCapital > 0 ? capital / initialCapital - 1 : 0;
+  const sharpe = sharpeRatio(
+    trades.map((t) => t.forwardReturnNet),
+    252 / horizon,
+  );
+  const sortino = sortinoRatio(
+    trades.map((t) => t.forwardReturnNet),
+    252 / horizon,
+  );
+
+  const dd = trades.length
+    ? drawdownStats(buildEquity(trades, initialCapital))
+    : { maxDrawdownPct: 0 };
+
+  const calmar =
+    dd.maxDrawdownPct > 0 && trades.length > 0
+      ? round(compoundedNet / (dd.maxDrawdownPct / 100), 2)
+      : null;
+
+  return {
+    strategyId,
+    horizonDays: horizon,
+    signalsEvaluated: decisionCount,
+    trades: trades.length,
+    winRatePct: round(
+      (trades.filter((t) => t.forwardReturnNet > 0).length / Math.max(1, trades.length)) * 100,
+      1,
+    ),
+    avgTradeReturnPct: round(
+      trades.length ? (netCumulative / trades.length) * 100 : 0,
+      3,
+    ),
+    grossCumulativeReturnPct: round(grossAvg * 100, 3),
+    netCumulativeReturnPct: round(compoundedNet * 100, 2),
     maxDrawdownPct: round(dd.maxDrawdownPct, 2),
     sharpeAnnualized: sharpe === null ? null : round(sharpe, 2),
+    sortinoAnnualized: sortino === null ? null : round(sortino, 2),
+    calmarRatio: calmar,
+    turnover: round(trades.length / Math.max(1, decisionCount), 3),
+    exposurePct: round((trades.length / Math.max(1, decisionCount)) * 100, 1),
+    buyHoldReturnPct: round(buyHold * 100, 2),
+    benchmarkOutperformancePct: round(
+      (compoundedNet - buyHold) * 100,
+      2,
+    ),
+    avgCostPerTradeBps: round(
+      trades.length ? (totalCostFraction / trades.length) * 10000 : 0,
+      2,
+    ),
   };
+}
+
+function buildEquity(trades: TradeRecord[], initialCapital: number): number[] {
+  const equity: number[] = [];
+  let prev = initialCapital;
+  for (const t of trades) {
+    prev *= 1 + t.forwardReturnNet;
+    equity.push(prev);
+  }
+  return equity.length ? equity : [initialCapital];
 }

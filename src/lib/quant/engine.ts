@@ -3,6 +3,7 @@ import type {
   ComponentScore,
   DataSource,
   Direction,
+  MarketRegime,
   QuantSignal,
 } from "./types";
 import {
@@ -21,10 +22,15 @@ import {
   roc,
   round,
   rsi,
+  sharpeRatio,
   sma,
   stdev,
 } from "./indicators";
+import { computeTailRiskMetrics } from "./extremeValue";
+import { assessDataQuality } from "./dataQuality";
 import { runStrategies } from "./strategies";
+
+const MODEL_VERSION = "quant-composite-v1";
 
 export const COMPONENT_WEIGHTS = {
   momentum: 0.3,
@@ -35,13 +41,13 @@ export const COMPONENT_WEIGHTS = {
 } as const;
 
 const DIRECTION_THRESHOLD = 0.06;
-const STRENGTH_SCALE = 150;
 
 export interface ComputeSignalInput {
   symbol: string;
   bars: Bar[];
   timeframe?: string;
   source?: DataSource;
+  regime?: MarketRegime;
 }
 
 function insufficient(detail: string): ComponentScore {
@@ -72,7 +78,11 @@ export function computeQuantSignal(input: ComputeSignalInput): QuantSignal {
 
   const direction: Direction =
     score > DIRECTION_THRESHOLD ? "BUY" : score < -DIRECTION_THRESHOLD ? "SELL" : "HOLD";
-  const strength = Math.min(100, Math.round(Math.abs(score) * STRENGTH_SCALE));
+
+  const confidence = calibrateConfidence(score, input.regime?.riskMultiplier ?? 1);
+  const strength = Math.min(100, Math.round(Math.abs(score) * 100));
+
+  const risk = riskMetrics(bars, closes, volumes, barsPerYear);
 
   return {
     symbol,
@@ -89,10 +99,45 @@ export function computeQuantSignal(input: ComputeSignalInput): QuantSignal {
     overall: {
       direction,
       score: round(score, 3),
+      confidence: round(confidence, 3),
       strength,
     },
     strategies: runStrategies(bars),
-    riskMetrics: riskMetrics(bars, closes, volumes, barsPerYear),
+    riskMetrics: risk,
+    riskChecks: riskChecks(bars, score, input.regime?.riskMultiplier ?? 1),
+    dataQuality: assessDataQuality(symbol, timeframe, bars),
+  };
+}
+
+function calibrateConfidence(score: number, riskMultiplier: number): number {
+  const k = 5;
+  let conf = 1 / (1 + Math.exp(-k * score));
+  conf *= clamp(riskMultiplier, 0, 1);
+  return clamp(conf, 0, 1);
+}
+
+function riskChecks(
+  bars: Bar[],
+  score: number,
+  riskMultiplier: number,
+): QuantSignal["riskChecks"] {
+  const closes = bars.map((b) => b.c);
+  const atr14 = lastValue(atr(bars, 14));
+  const price = closes[closes.length - 1] || 1;
+  const directionActive = Math.abs(score) > DIRECTION_THRESHOLD;
+
+  const stopDistancePct =
+    atr14 === null ? null : round((atr14 / price) * 100 * 2, 2);
+
+  const baseBudget = directionActive ? 0.2 : 0;
+  const riskBudgetPct = directionActive
+    ? round(clamp(baseBudget * riskMultiplier, 0, 0.5) * 100, 2)
+    : null;
+
+  return {
+    riskBudgetPct,
+    stopDistancePct,
+    modelVersion: MODEL_VERSION,
   };
 }
 
@@ -268,12 +313,7 @@ function riskMetrics(
   const price = closes[closes.length - 1] || 1;
 
   const recentReturns = dailyReturns(closes, 20);
-  const sd = stdev(recentReturns);
-  const sharpe20d =
-    recentReturns.length >= 10 && sd > 0
-      ? (recentReturns.reduce((a, b) => a + b, 0) / recentReturns.length / sd) *
-        Math.sqrt(barsPerYear)
-      : null;
+  const sharpeValue = sharpeRatio(recentReturns, barsPerYear);
 
   const dd = drawdownStats(closes, Math.min(252, closes.length));
   const avgVolume =
@@ -281,13 +321,16 @@ function riskMetrics(
       ? volumes.slice(-20).reduce((a, b) => a + b, 0) / 20
       : volumes.reduce((a, b) => a + b, 0) / Math.max(1, volumes.length);
 
+  const tail = computeTailRiskMetrics(recentReturns, { level: 0.99, horizonDays: 1 });
+
   return {
     realizedVolAnnualized: currentRv === null ? 0 : round(currentRv * 100),
     realizedVolPercentile: round(pctile, 2),
     atrPct: atr14 === null ? 0 : round((atr14 / price) * 100),
     maxDrawdownPct: round(dd.maxDrawdownPct, 1),
     currentDrawdownPct: round(dd.currentDrawdownPct, 1),
-    sharpe20d: sharpe20d === null ? null : round(sharpe20d, 2),
+    sharpeAnnualized: sharpeValue === null ? null : round(sharpeValue, 2),
     avgDailyVolume: Math.round(avgVolume),
+    tail,
   };
 }

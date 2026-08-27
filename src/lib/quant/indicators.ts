@@ -207,6 +207,33 @@ export interface DrawdownStats {
   currentDrawdownPct: number;
 }
 
+export function sharpeRatio(
+  returns: number[],
+  barsPerYear: number,
+): number | null {
+  if (returns.length < 2) return null;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const sd = stdev(returns);
+  if (sd === 0) return null;
+  return (mean / sd) * Math.sqrt(barsPerYear);
+}
+
+export function sortinoRatio(
+  returns: number[],
+  barsPerYear: number,
+  targetReturn = 0,
+): number | null {
+  if (returns.length < 2) return null;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const downside = returns.filter((r) => r < targetReturn);
+  if (downside.length === 0) return null;
+  const downsideDev = Math.sqrt(
+    downside.reduce((a, b) => a + (b - targetReturn) ** 2, 0) / downside.length,
+  );
+  if (downsideDev === 0) return null;
+  return ((mean - targetReturn) / downsideDev) * Math.sqrt(barsPerYear);
+}
+
 export function drawdownStats(values: number[], lookback?: number): DrawdownStats {
   const slice = lookback ? values.slice(-lookback) : values;
   if (slice.length === 0) return { maxDrawdownPct: 0, currentDrawdownPct: 0 };

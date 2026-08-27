@@ -1,0 +1,34 @@
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import { AGENT_PROFILES } from "@/lib/agents/profiles";
+import { AgentMascot } from "./AgentMascot";
+
+describe("AgentMascot", () => {
+  it.each(Object.keys(AGENT_PROFILES) as Array<keyof typeof AGENT_PROFILES>)(
+    "renders the persistent identity for %s",
+    (role) => {
+      const profile = AGENT_PROFILES[role];
+      render(<AgentMascot role={role} showLabel />);
+
+      expect(screen.getByText(profile.name)).toBeInTheDocument();
+      expect(screen.getByText(profile.title)).toBeInTheDocument();
+      expect(screen.getByLabelText(`${profile.name}, ${profile.title}`)).toBeInTheDocument();
+    },
+  );
+
+  it("exposes the requested animation state without changing the stable identity label", () => {
+    render(<AgentMascot role="market" state="thinking" />);
+
+    const mascot = screen.getByLabelText("Vector, Market Structure");
+    expect(mascot).toHaveAttribute("data-mascot-state", "thinking");
+    expect(mascot).toHaveAttribute("title", "Vector · Market Structure · thinking");
+  });
+
+  it("renders a compact mascot without requiring a label", () => {
+    render(<AgentMascot role="cio" size="sm" />);
+
+    expect(screen.queryByText(AGENT_PROFILES.cio.name)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("North, Chief Investment Officer")).toBeInTheDocument();
+  });
+});

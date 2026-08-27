@@ -57,6 +57,9 @@ docker compose up --build
 | GET | `/events/recent` | In-memory buffer (no DB read) |
 | WS | `/events/ws` | Live event stream (one JSON object per event) |
 | GET | `/market/{symbol}` | Current broker quote |
+| POST | `/quant/data-quality` | Validate OHLCV history and return actionability metadata |
+| POST | `/quant/execution-cost` | Preview slippage, market impact, commission, and all-in notional |
+| POST | `/agents/status` | Publish agent lifecycle status to the event bus |
 | POST | `/admin/reset` | Wipe mock broker + all local tables (mock mode only) |
 | POST | `/admin/tick` | Advance mock prices once; fill crossed limits (mock only) |
 | POST | `/admin/fill-now/{id}` | Force-fill a resting limit order (mock only) |
@@ -82,7 +85,10 @@ start http://127.0.0.1:8000/
 → ORDER_SUBMITTED → ORDER_FILLED | ORDER_CANCELED → POSITION_UPDATED`
 
 Every step is published to the bus, persisted to the `events` table and fanned
-out to WebSocket subscribers.
+out to WebSocket subscribers. Agent lifecycle updates use `AGENT_STATUS` events
+with a payload such as `{"agent_id":"bull-agent-v1","role":"bull","status":"thinking","run_id":"run-123","progress":42}`;
+the frontend maps `idle`, `thinking`, `speaking`, `success`, and `error` directly
+to mascot animation states.
 
 ## Risk engine rules
 
@@ -108,6 +114,8 @@ All settings come from environment / `.env` (see `.env.example`). Highlights:
   `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` (paper by default).
 - `DATABASE_URL` — any SQLAlchemy async driver; default SQLite.
 - Risk limits as fractions of equity (0.15 = 15%).
+- `QUANT_MIN_HISTORY_BARS`, `QUANT_MAX_GAP_BARS`, and `QUANT_STALE_AFTER_INTERVALS` control data-quality actionability.
+- `EXECUTION_BASE_SLIPPAGE_BPS`, `EXECUTION_MARKET_IMPACT_BPS_PER_1PCT_ADV`, `EXECUTION_MAX_MARKET_IMPACT_BPS`, `EXECUTION_COMMISSION_PER_SHARE`, and `EXECUTION_FIXED_FEE` configure conservative pre-trade cost estimates.
 - `SECTOR_MAP_JSON` — optional `{"TICKER":"sector"}` override.
 
 ## Development

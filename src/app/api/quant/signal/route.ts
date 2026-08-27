@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import type { SignalResponse } from "@/lib/quant/types";
+import type { MarketRegime, SignalResponse } from "@/lib/quant/types";
 import { getBars } from "@/lib/quant/datafeed";
 import { computeQuantSignal } from "@/lib/quant/engine";
 import { detectRegime } from "@/lib/quant/regime";
@@ -37,13 +37,22 @@ export async function GET(request: NextRequest) {
       : detectRegime([], benchmarkSymbol);
 
   const generatedAt = new Date().toISOString();
-  let anyAlpaca = benchmarkResult.source === "ALPACA";
-  const signals = [];
-  for (const symbol of symbols) {
-    const { bars, source } = await getBars(symbol, timeframe, limit);
-    if (source === "ALPACA") anyAlpaca = true;
-    signals.push(computeQuantSignal({ symbol, bars, timeframe, source }));
-  }
+  const symbolResults = await Promise.all(
+    symbols.map((s) => getBars(s, timeframe, limit)),
+  );
+  const anyAlpaca =
+    benchmarkResult.source === "ALPACA" ||
+    symbolResults.some((r) => r.source === "ALPACA");
+
+  const signals = symbols.map((symbol, i) =>
+    computeQuantSignal({
+      symbol,
+      bars: symbolResults[i].bars,
+      timeframe,
+      source: symbolResults[i].source,
+      regime,
+    }),
+  );
 
   const response: SignalResponse = {
     generatedAt,
@@ -60,6 +69,7 @@ interface SignalRequestBody {
   bars?: unknown;
   benchmarkBars?: unknown;
   benchmarkSymbol?: string;
+  regime?: unknown;
 }
 
 function coerceBars(raw: unknown) {
@@ -78,6 +88,19 @@ function coerceBars(raw: unknown) {
     .map((b) => ({ t: b.t as string, o: b.o as number, h: b.h as number, l: b.l as number, c: b.c as number, v: b.v as number }))
     .sort((a, b) => a.t.localeCompare(b.t));
   return bars.length > 0 ? bars : null;
+}
+
+function coerceRegime(raw: unknown): MarketRegime | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.trend !== "string" ||
+    typeof r.volatility !== "string" ||
+    typeof r.riskMultiplier !== "number"
+  ) {
+    return null;
+  }
+  return r as unknown as MarketRegime;
 }
 
 export async function POST(request: NextRequest) {
@@ -104,6 +127,7 @@ export async function POST(request: NextRequest) {
     bars,
     timeframe: body.timeframe ?? DEFAULT_TIMEFRAME,
     source: "EXTERNAL",
+    regime: coerceRegime(body.regime) ?? undefined,
   });
 
   const benchmarkBars = coerceBars(body.benchmarkBars);

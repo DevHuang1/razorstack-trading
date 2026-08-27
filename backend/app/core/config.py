@@ -67,7 +67,19 @@ class Settings(BaseSettings):
     max_daily_loss_percent: float = 0.05
     max_drawdown_percent: float = 0.10
 
-    # Optional JSON override, e.g. SECTOR_MAP_JSON='{"NVDA":"technology"}'
+    # --- Quant data quality ---
+    quant_min_history_bars: int = 60
+    quant_max_gap_bars: int = 3
+    quant_stale_after_intervals: int = 3
+
+    # --- Execution cost model (used for conservative pre-trade estimates) ---
+    execution_base_slippage_bps: float = 5.0
+    execution_market_impact_bps_per_1pct_adv: float = 2.0
+    execution_max_market_impact_bps: float = 50.0
+    execution_commission_per_share: float = 0.0
+    execution_fixed_fee: float = 0.0
+
+    # Optional JSON override, e.g. SECTOR_MAP_JSON='{\"NVDA\":\"technology\"}'
     sector_map_json: str = ""
 
     # --- Mock broker / background tasks ---

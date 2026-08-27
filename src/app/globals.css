@@ -24,3 +24,110 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Original electric-bot mascot system. The animation describes agent state,
+   while color remains the stable role identity. */
+.mascot-shell {
+  --mascot-accent: #c084fc;
+  --mascot-soft: rgba(192, 132, 252, 0.14);
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid color-mix(in srgb, var(--mascot-accent) 42%, transparent);
+  border-radius: 1rem;
+  background:
+    radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--mascot-accent) 24%, transparent), transparent 48%),
+    linear-gradient(145deg, rgba(18, 25, 42, 0.98), rgba(5, 8, 16, 0.98));
+  box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.04), 0 0 22px color-mix(in srgb, var(--mascot-accent) 12%, transparent);
+}
+
+.mascot-shell-sm { width: 2.5rem; height: 2.5rem; border-radius: 0.8rem; }
+.mascot-shell-md { width: 3.5rem; height: 3.5rem; }
+.mascot-shell-lg { width: 5rem; height: 5rem; border-radius: 1.25rem; }
+
+.mascot-grid {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.32;
+  background-image: radial-gradient(circle at center, rgba(255,255,255,.08), transparent 72%), linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+  background-size: auto, 10px 10px, 10px 10px;
+}
+
+.mascot-orbit {
+  position: absolute;
+  width: 125%;
+  height: 36%;
+  border: 1px solid color-mix(in srgb, var(--mascot-accent) 42%, transparent);
+  border-radius: 50%;
+  opacity: 0.42;
+  transform: rotate(-25deg);
+  pointer-events: none;
+}
+
+.mascot-orbit-one { will-change: transform; animation: mascot-orbit-one 5s linear infinite; }
+.mascot-orbit-two { width: 80%; height: 120%; transform: rotate(25deg); opacity: 0.12; }
+.mascot-scanline { position: absolute; left: 0; right: 0; top: -20%; height: 18%; background: linear-gradient(transparent, color-mix(in srgb, var(--mascot-accent) 42%, transparent), transparent); opacity: 0; will-change: transform; pointer-events: none; }
+.mascot-bot { position: relative; z-index: 1; width: 78%; height: 78%; will-change: transform; animation: mascot-float 4.6s ease-in-out infinite; }
+.mascot-antenna-dot { animation: mascot-blink 3.4s ease-in-out infinite; }
+.mascot-eye { transform-box: fill-box; transform-origin: center; animation: mascot-eye-glow 2.8s ease-in-out infinite; }
+.mascot-eye-right { animation-delay: 0.1s; }
+.mascot-signal-mark { opacity: 0.72; }
+.mascot-thinking-dots, .mascot-signal-bars { position: absolute; z-index: 2; display: flex; align-items: flex-end; gap: 2px; }
+.mascot-thinking-dots { right: 8%; top: 10%; gap: 3px; }
+.mascot-thinking-dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--mascot-accent); animation: mascot-dot 1s ease-in-out infinite; }
+.mascot-thinking-dots i:nth-child(2) { animation-delay: .15s; }
+.mascot-thinking-dots i:nth-child(3) { animation-delay: .3s; }
+.mascot-signal-bars { right: 8%; bottom: 9%; height: 12px; }
+.mascot-signal-bars i { width: 2px; height: 5px; border-radius: 2px; background: var(--mascot-accent); animation: mascot-bars .8s ease-in-out infinite alternate; }
+.mascot-signal-bars i:nth-child(2) { height: 9px; animation-delay: .12s; }
+.mascot-signal-bars i:nth-child(3) { height: 7px; animation-delay: .24s; }
+.mascot-signal-bars i:nth-child(4) { height: 11px; animation-delay: .36s; }
+.mascot-success-ring { position: absolute; inset: 14%; border: 1px solid var(--mascot-accent); border-radius: 50%; animation: mascot-success 900ms ease-out both; }
+
+.mascot-state-thinking .mascot-scanline { opacity: 0.72; animation: mascot-scan 1.7s ease-in-out infinite; }
+.mascot-state-thinking .mascot-bot { animation: mascot-think 1.8s ease-in-out infinite; }
+.mascot-state-speaking .mascot-bot { animation: mascot-speak .65s ease-in-out infinite alternate; }
+.mascot-state-success { animation: mascot-success-shell 900ms ease-out both; }
+
+@keyframes mascot-float { 0%, 100% { transform: translateY(1px); } 50% { transform: translateY(-2px); } }
+@keyframes mascot-think { 0%, 100% { transform: translateY(1px) rotate(-1deg); } 50% { transform: translateY(-1px) rotate(1deg); } }
+@keyframes mascot-speak { from { transform: scale(0.98); } to { transform: scale(1.02); } }
+@keyframes mascot-orbit-one { to { transform: rotate(335deg); } }
+@keyframes mascot-orbit-two { to { transform: rotate(385deg); } }
+@keyframes mascot-scan { 0% { transform: translateY(-120%); } 100% { transform: translateY(650%); } }
+@keyframes mascot-eye-glow { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+@keyframes mascot-blink { 0%, 42%, 48%, 100% { opacity: 1; } 45% { opacity: .2; } }
+@keyframes mascot-dot { 0%, 100% { transform: translateY(0); opacity: .35; } 50% { transform: translateY(-3px); opacity: 1; } }
+@keyframes mascot-bars { from { transform: scaleY(.45); opacity: .4; } to { transform: scaleY(1); opacity: 1; } }
+@keyframes mascot-success { from { transform: scale(.3); opacity: 1; } to { transform: scale(1.8); opacity: 0; } }
+@keyframes mascot-success-shell { 0% { box-shadow: inset 0 0 20px rgba(255,255,255,.04), 0 0 0 var(--mascot-accent); } 45% { box-shadow: inset 0 0 20px rgba(255,255,255,.04), 0 0 28px color-mix(in srgb, var(--mascot-accent) 48%, transparent); } 100% { box-shadow: inset 0 0 20px rgba(255,255,255,.04), 0 0 22px color-mix(in srgb, var(--mascot-accent) 12%, transparent); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-shell, .mascot-shell *, .mascot-shell::before, .mascot-shell::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+.mascot-error-ring {
+  position: absolute;
+  right: 7%;
+  top: 7%;
+  z-index: 3;
+  display: grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  border: 1px solid #fb7185;
+  border-radius: 999px;
+  background: #3a111c;
+  color: #fecdd3;
+  font: 700 0.65rem/1 var(--font-geist-sans), sans-serif;
+  animation: mascot-error 1s ease-in-out infinite;
+}
+
+.mascot-state-error .mascot-bot { animation: mascot-error-bot 1.4s ease-in-out infinite; }
+
+@keyframes mascot-error { 0%, 100% { transform: scale(1); opacity: .75; } 50% { transform: scale(1.12); opacity: 1; } }
+@keyframes mascot-error-bot { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(-1px); } 60% { transform: translateX(1px); } }

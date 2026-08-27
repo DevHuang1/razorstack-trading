@@ -1,0 +1,359 @@
+QUANT ENGINE AND METHODS
+=========================
+Razorstack quantitative signal engine, backtest, allocation and advanced
+numerical methodologies. This document describes conventions, formulas and
+assumptions for everything under `src/lib/quant/` (TypeScript) and
+`backend/app/quant/` (Python).
+
+The TypeScript side owns: composite signals, indicators, regime, data quality,
+strategies, execution costs, walk-forward backtest, risk-parity allocation,
+paper tracker, and the extreme-value / American-option solvers. The Python
+(FastAPI) side owns the self-exciting point-process fitter (Hawkes) and the
+Monte-Carlo algorithmic-differentiation Greeks.
+
+=====================================================================
+1. COMPOSITE SIGNAL ENGINE
+=====================================================================
+`engine.ts` combines five component scores into a single directional signal.
+
+Component weights:
+    momentum            0.30
+    trend               0.30
+    volume              0.15
+    volatility quality  0.10
+    mean-reversion bias 0.15
+
+The raw composite score is
+
+    score = clamp( sum_i (component_i.score * component_i.weight), -1, 1 )
+
+Direction is derived from thresholds:
+    score >  +0.06  -> BUY
+    score <  -0.06  -> SELL
+    otherwise       -> HOLD
+
+Strength is |score| scaled to 0..100. Confidence is a logistic calibration of
+the score, additionally damped by the regime risk multiplier:
+
+    confidence = logit(score) * clamp(riskMultiplier, 0, 1)
+               = ( 1 / (1 + exp(-5 * score)) ) * riskMultiplier
+
+A crisis regime (riskMultiplier = 0) therefore yields zero confidence even on a
+strong trend, gating execution.
+
+Momentum component
+    Uses 5/10/21-day rate-of-change blended as tanh(value / (vol * sqrt(10)))
+    so extreme moves saturate. vol is the 30-day standard deviation of simple
+    daily returns.
+
+Trend component
+    Weighted agreement of price vs SMA20, SMA20 vs SMA50, SMA50 vs SMA200 and
+    EMA20 5-bar slope, each normalised by a characteristic band (5%, 3%, 2%,
+    2%) and clamped to [-1, 1].
+
+Volume component
+    Relative volume (latest / 20d average) confirms the 5-day move direction:
+        confirmation = clamp((relVol - 1) / 1.5, -0.6, 1)
+        score = sign(5d ROC) * confirmation * clamp(|5d ROC|/0.04, 0.3, 1)
+
+Volatility-quality component
+    Realised-vol percentile (of trailing 250) is mapped to a "low vol is good"
+    score: score = clamp(1 - 2 * percentile, -1, 1).
+
+Mean-reversion component
+    score = clamp((50 - RSI14) / 22, -1, 1), overridden to at least +0.4 when
+    price closes below the lower Bollinger band and at most -0.4 above the
+    upper band.
+
+Risk metrics returned with every signal:
+    realizedVolAnnualized, realizedVolPercentile, atrPct, maxDrawdownPct,
+    currentDrawdownPct, sharpeAnnualized, avgDailyVolume and a `tail` block
+    (see section 6).
+
+Risk checks (per signal, for execution gating):
+    riskBudgetPct  = 20% * riskMultiplier when a direction is active (else null)
+    stopDistancePct = 2 * ATR / price
+    modelVersion   = "quant-composite-v1"
+
+Model version "quant-composite-v1" is embedded in `riskChecks` so downstream
+consumers can verify which model produced a signal.
+
+=====================================================================
+2. INDICATORS
+=====================================================================
+All indicator primitives live in `indicators.ts`. Returns on elapsed-bar
+basis are annualised with `annualizationFactor`:
+    1Min -> 390*252    1Hour -> 6.5*252
+    5Min -> 78*252     1Day  -> 252
+    15Min-> 26*252     1Week -> 252 (default)
+
+    SMA        trailing arithmetic mean, null during warm-up
+    EMA        k = 2/(period+1), seeded by the first `period` observations
+    RSI        Wilder smoothing, 100 when avg loss is zero
+    ROC        (x_t - x_{t-n}) / x_{t-n}
+    stdev      sample std-dev (n-1)
+    ATR        Wilder-smoothed average true range
+    Bollinger  SMA +/- k * sample std-dev (k=2 default)
+    OBV        cumulative +/- volume on up/down close
+    Sharpe     mean/std * sqrt(barsPerYear)
+    Sortino    (mean - target)/downsideDev * sqrt(barsPerYear)
+    drawdowns  peak-to-trough in percent
+    correlation sample correlation over the shorter tail
+
+Sharpe returns null when sd == 0 or n < 2; Sortino returns null when there are
+no below-target observations (so a zero-downside string scores null, not inf).
+
+=====================================================================
+3. REGIME
+=====================================================================
+`regime.ts` detects the market regime from a benchmark series (default SPY):
+
+  trend        bull when benchmarkTrendScore > 0.33, bear below -0.33 else range
+  volatility   from realised-vol percentile:
+                >= 0.90 CRISIS, >= 0.70 VOLATILE, <= 0.30 QUIET else NORMAL
+  riskMultiplier
+                CRISIS -> 0.0, VOLATILE -> 0.5, QUIET -> 1.25, else 1.0
+
+`riskMultiplier` flows into the engine (confidence and risk budget) and into
+allocation. A multiplier of zero represents a hard risk-off state.
+
+=====================================================================
+4. DATA QUALITY
+=====================================================================
+`dataQuality.ts` grades a bar series before a signal is trusted. It detects:
+  * duplicate timestamps       (duplicateBarCount)
+  * missing bars / gaps        (missingBarCount, maxGapBars)
+  * short history              (barCount < minHistoryBars)
+  * staleness                  (time since last bar > N intervals)
+
+Gap detection aligns to the timeframe interval. For daily bars, weekend and
+single-business-day gaps are NOT counted as missing (only *whole trading days*
+strictly between two bars count), so a normal consecutive daily series is
+fully actionable. The final `isActionable` flag is true only when there are no
+warnings. Example warning labels: history_short, duplicate_bars,
+gap_too_large, stale_last_bar.
+
+=====================================================================
+5. STRATEGIES
+=====================================================================
+`strategies.ts` exposes six named strategies under a shared registry. Each
+emits a vote {id, name, direction, strength (0..1), rationale}. Direction from
+a raw score uses thresholds +/-0.15 (|raw| <= 0.15 -> HOLD).
+
+  MOMENTUM        roc10/roc21, SMA20/SMA50 alignment, RSI overbought penalty.
+  MEAN_REVERSION  buys oversold (price <= lower band and RSI <= 35) and sells
+                  overbought (price >= upper band and RSI >= 65).
+  TREND           SMA50/SMA200, SMA20/SMA50 separation and EMA20 slope.
+  VALUE           price vs 200-day mean discount, calm-vol and 21d drift.
+  NEWS            OBV impulse, relative-volume surge and 5d flow (proxy for
+                  news-driven order flow; no NLP here).
+  OPTIONS         HOLD placeholder owned by the option desk.
+
+The composite `runStrategies(bars)` evaluates all six and returns their votes,
+which appear on each QuantSignal as `strategies`.
+
+=====================================================================
+6. EXTREME VALUE / TAIL RISK
+=====================================================================
+`extremeValue.ts` provides both a Gaussian and a non-Gaussian (heavy-tailed)
+VaR per bar series, exposed as `riskMetrics.tail`.
+
+Gaussian VaR
+    gaussianQuantile uses the Acklam rational approximation to the inverse
+    normal CDF. The daily/period loss is
+        VaR_g = z(level) * vol_period * sqrt(horizonDays)
+    where vol_period is the annualised vol converted to the horizon.
+    `gaussianVaR(volAnnualized, level, horizonDays)` returns the daily VaR as
+    a percentage.
+
+Hill estimator (tail index)
+    For the left tail, take positive magnitudes x_i = -return_i, sort
+    descending, keep the top k observations (k = min(floor(n * maxFraction)+1,
+    n - 2), capped at >= minEvents). The Hill estimator of the tail index is
+        alpha = k / sum_i^k log(x_i / x_(k+1))
+    alpha < 4 flags a fat-tailed ("crisis-prone") distribution.
+
+Pareto tail VaR
+    Assuming a power-law tail with index alpha above threshold x_T, the VaR at
+    level L is
+        VaR_evt = x_T * ( (1 - L) / exceedFrac )^(-1/alpha)
+    where exceedFrac is the observed exceedance fraction.
+
+`computeTailRiskMetrics` returns { tailIndex, tailThreshold, gaussianVaR,
+nonGaussianVaR, fatTail }.
+
+=====================================================================
+7. EXECUTION COSTS
+=====================================================================
+`executionCosts.ts` models the cost of turning a signal into a fill:
+
+    baseSlippageBps           = 5.0
+    marketImpactBpsPer1pctAdv = 2.0   (per 1% of average daily volume)
+    maxMarketImpactBps        = 50.0
+    commissionPerShare        = 0.0
+    fixedFee                  = 0.0
+
+For a known average daily volume (ADV):
+    participationRate% = 100 * qty / ADV
+    impactBps = min(maxImpact, participationRate% * impactRate)
+    effectiveSlippageBps = baseSlippageBps + impactBps
+    slippage$ = notional * effectiveSlippageBps / 10_000
+    totalCost = slippage$ + commission + fixedFee
+
+`costAsFractionOfNotional` is what the backtest subtracts from each trade.
+
+=====================================================================
+8. WALK-FORWARD BACKTEST
+=====================================================================
+`performance.ts` runs a strategy over history and reports metrics net of
+execution cost. `walkForwardBacktest` reserves a train window and reports a
+separate test window to reduce look-ahead optimism.
+
+Trade loop (no look-ahead):
+  - at bar i, evaluate the strategy on bars[0..i] ONLY (a strict history slice)
+  - if the vote is BUY/SELL, enter at bars[i].c and exit at bars[i+horizon].c
+
+Portfolio / cost accounting:
+    notional     = capital * maxNotionalWeight
+    qty          = round(notional / entry)
+    costFraction = estimateExecutionCost(...).costAsFractionOfNotional
+    netReturn    = direction * (exit/entry - 1) - costFraction
+    capital     += netReturn * notional
+
+Reported metrics:
+    winRatePct, avgTradeReturnPct, gross & net cumulative return,
+    maxDrawdownPct, sharpe & sortino (annualised by 252/horizon), calmar,
+    turnover (= trades / decisions), exposurePct, buy-and-hold return,
+    benchmarkOutperformancePct, avgCostPerTradeBps.
+
+Default horizon is 5 days; a strategy needs at least max(minBars+10, 120) bars
+to run (at least 200 for walk-forward).
+
+=====================================================================
+9. RISK-PARITY ALLOCATION
+=====================================================================
+`allocation.ts` builds inverse-volatility (risk-parity) weights.
+
+    1. per-asset annualised vol   v_i = stdev_daily * sqrt(252)
+    2. raw weight                 w_i = (1/v_i) / sum_j (1/v_j)
+    3. cap any weight at maxConcentration (default 0.4) and re-normalise
+    4. scale to target vol: if estimated portfolio vol > targetVol (0.2),
+       multiply by targetVol / portfolioVol; portfolio vol uses the full
+       covariance including cross-asset correlation
+    5. apply the regime riskMultiplier and re-clamp to the concentration cap
+
+Weights are final-normalised and each is clamped to [0, maxConcentration], so
+a risk-off regime (multiplier 0) yields all-zero weights (fully in cash).
+
+=====================================================================
+10. AMERICAN PUT: CRANK-NICOLSON + PROJECTED SOR
+=====================================================================
+`americanPricing.ts` prices an American put on a rectangular grid in the
+log-price z = log(S/S0) bounded by zMax (default 8), with N=200 space steps
+and M=400 time steps to maturity.
+
+The Black-Scholes PDE is discretised with the Crank-Nicolson (trapezoidal)
+solver, producing a tridiagonal system (a, b, c) with
+    a = 0.5*sigma^2/dz^2 - mu/(2 dz)
+    b = -sigma^2/dz^2 - r
+    c = 0.5*sigma^2/dz^2 + mu/(2 dz)
+and mu = r - 0.5*sigma^2. Each time step is solved by Projected Successive
+Over-Relaxation (omega = 1.2, tol = 1e-8, max 5000 iterations), with the
+projection enforcing the early-exercise constraint u >= max(K - S, 0).
+
+The early-exercise (free) boundary is located as the spot-like price at the
+transition from the "hold" region (u > payoff) into the exercise region. The
+result exposes price, earlyExercisePremium, europeanPrice (solver run without
+projection), freeBoundaryPrice, and `exercised = spot < freeBoundary`.
+
+The European output is the straight Crank-Nicolson solution of the same grid;
+it equals the Black-Scholes analytic value to within the grid's spatial
+resolution.
+
+=====================================================================
+11. HAWKES SELF-EXCITING PROCESS (Python)
+=====================================================================
+`backend/app/quant/hawkes.py` fits an exponential-kernel Hawkes model by exact
+maximum likelihood (no grid discretisation). Model:
+
+    lambda(t) = mu + sum_{t_i < t} alpha * exp(-beta * (t - t_i))
+
+with a closed-form compensator (integral of lambda) for the exponential kernel.
+Parameters mu, alpha, beta are found by L-BFGS-B minimising the negative
+log-likelihood. The branching ratio
+
+    branching_ratio = alpha / beta
+
+is the expected number of directly-triggered "aftershocks" per event:
+    < 1  subcritical / stationary (clusters die out)
+    >= 1 supercritical (clusters self-sustain)
+
+An optional stationarity penalty (+penalty * max(0, alpha/beta - 1)^2) can pin
+the fit into the subcritical region. The payload also carries the conditional
+intensity at each observed event, a model-vs-empirical intensity comparison on
+a coarse grid, the log-likelihood, and convergence status.
+
+=====================================================================
+12. MONTE-CARLO AD GREEKS (Python)
+=====================================================================
+`backend/app/quant/mc_greeks.py` computes first- and second-order sensitivities
+of a European option by Monte Carlo WITHOUT finite differences, using
+algorithmic differentiation.
+
+Forward-mode Hyper-Dual numbers
+    A second-order dual number x + x' e1 + x'' e2 carries value, first and
+    second derivative. The geometric-Brownian-motion terminal price and payoff
+    are evaluated under first/second-order arithmetic so dPrice/dP travels
+    exactly along each path. This yields unbiased vega, rho and theta.
+
+Likelihood-Ratio Method (LRM)
+    Pathwise AD gives identically zero gamma (no path crosses the strike in a
+    linear payoff) and a noisy delta. Those two are instead computed via the
+    score-function / likelihood-ratio method:
+        greek = E[ payoff * dlogp/dtheta ]
+    using the analytic log-normal density score, which is unbiased and smooth.
+    Applied to delta and gamma.
+
+Conventions (Black-Scholes):
+    delta = dC/dS            gamma = d2C/dS2
+    vega  = dC/dsigma        rho   = dC/dr
+    theta = -dC/dT           (calendar decay; negative for a long option)
+
+Validation
+    For S = K = 100, r = 0.05, sigma = 0.2, T = 1 (200k paths, seed 42) the
+    MC-AD values agree with Black-Scholes within Monte-Carlo noise:
+
+        price  10.46 vs 10.45    gamma 0.0196 vs 0.0188
+        delta   0.64 vs 0.64     vega  37.7  vs 37.5
+        theta  -6.42 vs -6.41    rho   53.1  vs 53.2
+
+=====================================================================
+13. PAPER TRACKER & LEADERBOARD
+=====================================================================
+`paper.ts` persists signals to localStorage (key "razorstack-quant-paper", with
+an in-memory fallback) so they can be resolved against later prices. Each
+record stores symbol, strategy, modelVersion, entryPrice, direction and an
+optional exitPrice / realizedReturn. Resolution is sign-aware:
+    realizedReturn = direction * (exit/entry - 1)
+        (BUY  -> positive when price rises; SELL -> positive when price falls)
+
+The leaderboard groups resolved records by strategy and reports win rate, mean
+and cumulative return, annualised Sharpe, max drawdown, and pnl%, sorted
+descending by pnl%.
+
+=====================================================================
+14. VERIFICATION & TEST COVERAGE
+=====================================================================
+TypeScript (vitest, jsdom)
+    - indicators.test.ts, regime.test.ts, dataQuality.test.ts, strategies,
+      engine, extremeValue, americanPricing, executionCosts, allocation,
+      performance (walk-forward), paper. 91 total TS tests pass.
+
+Python (pytest)
+    - backend/tests/test_quant.py covers execution cost, data quality,
+      trade proposals with cost breakdown, risk cash floor, Hawkes fitting and
+      MC-AD Greeks vs Black-Scholes. 14 tests pass.
+
+Run:
+    npx next typegen && npx tsc --noEmit && npm run test
+    (cd backend && .venv/bin/python -m pytest tests/test_quant.py -q)

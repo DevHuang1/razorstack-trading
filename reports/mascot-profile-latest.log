@@ -1,0 +1,139 @@
+{
+  "targetUrl": "http://127.0.0.1:3000/research",
+  "durationMs": 3000,
+  "generatedAt": "2026-08-26T18:37:28.083Z",
+  "results": [
+    {
+      "engine": "chromium",
+      "state": "idle",
+      "frames": 360,
+      "meanFrameMs": 8.33,
+      "p95FrameMs": 9.1,
+      "estimatedFps": 120.02,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "chromium",
+      "state": "thinking",
+      "frames": 360,
+      "meanFrameMs": 8.33,
+      "p95FrameMs": 9.1,
+      "estimatedFps": 120,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "chromium",
+      "state": "speaking",
+      "frames": 360,
+      "meanFrameMs": 8.33,
+      "p95FrameMs": 9.2,
+      "estimatedFps": 120,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "chromium",
+      "state": "success",
+      "frames": 360,
+      "meanFrameMs": 8.33,
+      "p95FrameMs": 9.1,
+      "estimatedFps": 120,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "firefox",
+      "state": "idle",
+      "frames": 239,
+      "meanFrameMs": 12.55,
+      "p95FrameMs": 25.5,
+      "estimatedFps": 79.65,
+      "droppedFramePct": 15.48,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "firefox",
+      "state": "thinking",
+      "frames": 254,
+      "meanFrameMs": 11.88,
+      "p95FrameMs": 25.02,
+      "estimatedFps": 84.2,
+      "droppedFramePct": 17.72,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "firefox",
+      "state": "speaking",
+      "frames": 268,
+      "meanFrameMs": 11.13,
+      "p95FrameMs": 25,
+      "estimatedFps": 89.85,
+      "droppedFramePct": 9.33,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "firefox",
+      "state": "success",
+      "frames": 267,
+      "meanFrameMs": 11.24,
+      "p95FrameMs": 24.98,
+      "estimatedFps": 89,
+      "droppedFramePct": 6.74,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "webkit",
+      "state": "idle",
+      "frames": 180,
+      "meanFrameMs": 16.67,
+      "p95FrameMs": 18,
+      "estimatedFps": 60,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "webkit",
+      "state": "thinking",
+      "frames": 180,
+      "meanFrameMs": 16.66,
+      "p95FrameMs": 18,
+      "estimatedFps": 60.02,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "webkit",
+      "state": "speaking",
+      "frames": 180,
+      "meanFrameMs": 16.66,
+      "p95FrameMs": 18,
+      "estimatedFps": 60.02,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    },
+    {
+      "engine": "webkit",
+      "state": "success",
+      "frames": 180,
+      "meanFrameMs": 16.67,
+      "p95FrameMs": 18,
+      "estimatedFps": 60,
+      "droppedFramePct": 0,
+      "longTaskCount": 0,
+      "maxLongTaskMs": 0
+    }
+  ]
+}
