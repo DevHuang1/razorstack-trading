@@ -3,11 +3,13 @@
 Available only when BROKER_MODE=mock; real Alpaca deployments get a 409 so
 production state can never be wiped or simulated by accident.
 """
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from sqlalchemy import delete
 
+from app.core.auth import require_api_key
 from app.core.errors import ConflictError, NotFoundError
 from app.events.manager import EventBus
+from app.integrations.base import InvalidOrderError, OrderNotFoundError
 from app.integrations.mock_alpaca import MockAlpacaService
 from app.models.event import EventModel
 from app.models.order import OrderModel
@@ -16,10 +18,9 @@ from app.models.portfolio import PortfolioSnapshotModel
 from app.models.risk_decision import RiskDecisionModel
 from app.models.trade import TradeProposalModel
 from app.schemas.event import EventType
+from app.schemas.order import OrderResult
 
-router = APIRouter(prefix="/admin", tags=["admin"])
-
-_TERMINAL = frozenset({"FILLED", "CANCELED", "REJECTED", "FAILED"})
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_api_key)])
 
 _LOCAL_TABLES = (
     EventModel,
@@ -38,29 +39,25 @@ def _mock_broker(request: Request) -> MockAlpacaService:
     return broker
 
 
-async def apply_tick_results(app: FastAPI, filled_ids: list[str]) -> list[dict]:
-    """Publish ORDER_FILLED for tick fills, then refresh snapshot + positions."""
-    if not filled_ids:
+async def publish_fills(app: FastAPI, fills: list[OrderResult]) -> list[dict]:
+    """Emit ORDER_FILLED for each freshly-filled order and refresh analytics."""
+    if not fills:
         return []
-    broker = app.state.broker
     bus: EventBus = app.state.bus
 
     published: list[dict] = []
-    batch: list[tuple[str, dict]] = []
-    for order_id in filled_ids:
-        filled = await broker.get_order_status(order_id)
+    for f in fills:
         payload = {
-            "order_id": order_id,
-            "broker_order_id": order_id,
-            "symbol": filled.symbol,
-            "quantity": filled.filled_quantity,
-            "avg_price": filled.avg_fill_price,
+            "order_id": f.broker_order_id,
+            "broker_order_id": f.broker_order_id,
+            "proposal_id": f.proposal_id,
+            "symbol": f.symbol,
+            "quantity": f.filled_quantity,
+            "avg_price": f.avg_fill_price,
             "source": "tick",
         }
-        batch.append((EventType.ORDER_FILLED.value, payload))
+        await bus.publish(EventType.ORDER_FILLED.value, payload)
         published.append(payload)
-    if batch:
-        await bus.publish_many(batch)
 
     portfolio = app.state.portfolio
     snapshot = await portfolio.persist_current()
@@ -69,6 +66,20 @@ async def apply_tick_results(app: FastAPI, filled_ids: list[str]) -> list[dict]:
         {"equity": snapshot.equity, "risk_score": snapshot.risk_score},
     )
     return published
+
+
+async def apply_tick_results(app: FastAPI, filled_ids: list[str]) -> list[dict]:
+    """Reconcile locally-stored orders, then publish fills + refresh analytics."""
+    if not filled_ids:
+        return []
+    orders = app.state.orders
+
+    results: list[OrderResult] = []
+    for order_id in filled_ids:
+        row = await orders.refresh_by_broker_id(order_id)
+        if row is not None:
+            results.append(row)
+    return await publish_fills(app, results)
 
 
 @router.post("/reset")
@@ -112,14 +123,11 @@ async def fill_order_now(order_id: str, request: Request):
         ).scalar_one_or_none()
     broker_order_id = row.broker_order_id if row and row.broker_order_id else order_id
 
-    record = broker._orders.get(broker_order_id)
-    if record is None:
-        raise NotFoundError(f"order {order_id} not found")
-    if record["status"] in _TERMINAL:
-        raise ConflictError(f"order {order_id} already terminal ({record['status']})")
-
-    async with broker._lock:
-        broker._fill(broker_order_id, broker.price_for(record["symbol"]))
-        broker._save()
+    try:
+        await broker.force_fill(broker_order_id)
+    except OrderNotFoundError as exc:
+        raise NotFoundError(str(exc))
+    except InvalidOrderError as exc:
+        raise ConflictError(str(exc))
     published = await apply_tick_results(request.app, [broker_order_id])
     return {"status": "ok", "fills": published}

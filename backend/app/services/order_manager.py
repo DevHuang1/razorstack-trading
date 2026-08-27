@@ -102,6 +102,53 @@ class OrderManager:
             await session.commit()
             return self._to_result(merged)
 
+    async def refresh_by_broker_id(self, broker_order_id: str) -> OrderResult | None:
+        """Update the local row that maps to a broker order id (no-op if absent)."""
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(OrderModel).where(OrderModel.broker_order_id == broker_order_id)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            if row.status in TERMINAL_ORDER_STATUSES or not row.broker_order_id:
+                return self._to_result(row)
+            latest = await self.broker.get_order_status(row.broker_order_id)
+            row.status = latest.status
+            row.filled_quantity = max(row.filled_quantity, latest.filled_quantity)
+            row.avg_fill_price = latest.avg_fill_price or row.avg_fill_price
+            row.filled_at = latest.filled_at or row.filled_at
+            await session.commit()
+            return self._to_result(row)
+
+    async def reconcile_open_orders(self) -> list[OrderResult]:
+        """Refresh every non-terminal local order from the broker and persist.
+
+        Returns the orders that transitioned to FILLED during this pass so a
+        caller can emit ``ORDER_FILLED`` events (used by the Alpaca poll loop).
+        """
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OrderModel).where(OrderModel.status.notin_(TERMINAL_ORDER_STATUSES))
+                )
+            ).scalars().all()
+            filled: list[OrderResult] = []
+            for row in rows:
+                if not row.broker_order_id:
+                    continue
+                latest = await self.broker.get_order_status(row.broker_order_id)
+                newly_filled = latest.status == "FILLED" and row.status != "FILLED"
+                row.status = latest.status
+                row.filled_quantity = max(row.filled_quantity, latest.filled_quantity)
+                row.avg_fill_price = latest.avg_fill_price or row.avg_fill_price
+                row.filled_at = latest.filled_at or row.filled_at
+                if newly_filled:
+                    filled.append(self._to_result(row))
+            await session.commit()
+        return filled
+
     # ------------------------------------------------------------------ reads
     async def get_order(self, order_id: str) -> OrderResult:
         return self._to_result(await self._get_row(order_id))

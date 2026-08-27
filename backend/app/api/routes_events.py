@@ -29,13 +29,24 @@ async def recent_events(
 
 @router.websocket("/ws")
 async def events_ws(websocket: WebSocket):
-    """Stream every published event as JSON; one line per event."""
+    """Stream every published event as JSON; one line per event.
+
+    A periodic heartbeat detects clients that vanished without sending a close
+    frame: the ``send_text`` fails, the loop exits, and the subscriber queue is
+    removed from the bus (otherwise it would leak and never receive events).
+    """
     await websocket.accept()
     bus: EventBus = websocket.app.state.bus
     queue = bus.subscribe()
+    HEARTBEAT_SECONDS = 30.0
     try:
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                # Client tolerates a non-JSON "ping" (its JSON.parse is guarded).
+                await websocket.send_text("ping")
+                continue
             await websocket.send_json(event.model_dump(mode="json"))
     except WebSocketDisconnect:
         pass

@@ -8,8 +8,9 @@ failure of subscribers; delivery is best-effort beyond the DB write.
 import asyncio
 import logging
 from collections import deque
+from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.db.base import utcnow
 from app.models.event import EventModel
@@ -42,7 +43,8 @@ class EventBus:
             TradeEvent(event_type=et, payload=p or {}, timestamp=utcnow())
             for et, p in items
         ]
-        self._recent.extend(events)
+        # Persist first: the DB is the source of truth for /events history. If the
+        # commit fails, nothing is fanned out, so memory and history stay consistent.
         async with self.session_factory() as session:
             session.add_all(
                 [
@@ -56,13 +58,14 @@ class EventBus:
                 ]
             )
             await session.commit()
+        self._recent.extend(events)
         for event in events:
             for queue in list(self._subscribers):
                 try:
                     queue.put_nowait(event)
                 except asyncio.QueueFull:
                     logger.warning(
-                        "event subscriber queue full; dropping event",
+                        "event subscriber queue full; dropping event for one subscriber",
                         extra={"event_id": event.event_id},
                     )
         return events
@@ -103,3 +106,28 @@ class EventBus:
     def clear(self) -> None:
         """Drop the in-memory buffer (used by /admin/reset)."""
         self._recent.clear()
+
+    async def prune(self, days: int) -> int:
+        """Delete persisted events older than ``days`` (no-op when days <= 0)."""
+        if days <= 0:
+            return 0
+        cutoff = utcnow() - timedelta(days=days)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                delete(EventModel).where(EventModel.created_at < cutoff)
+            )
+            await session.commit()
+            return result.rowcount or 0
+
+    async def replay(self, limit: int = 500) -> None:
+        """Pre-populate the in-memory recent buffer from the DB after startup.
+
+        Without this, ``/events/recent`` is empty until the first new event and
+        would diverge from ``/events`` history. ``history()`` returns newest
+        first, so reverse to restore oldest-first ordering.
+        """
+        try:
+            events = await self.history(limit=limit)
+        except Exception:  # pragma: no cover - DB unavailable at startup
+            return
+        self._recent.extend(reversed(events))

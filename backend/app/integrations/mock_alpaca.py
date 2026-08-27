@@ -73,6 +73,7 @@ class MockAlpacaService(BrokerService):
         self._prices: dict[str, float] = {k: float(v) for k, v in BASE_PRICES.items()}
         self._rng = random.Random(seed)
         self._persist_path = persist_path
+        self._reserved: dict[str, float] = {}
         if persist_path:
             self._load(persist_path)
 
@@ -136,14 +137,36 @@ class MockAlpacaService(BrokerService):
         numbers = [int(oid.rsplit("-", 1)[-1]) for oid in self._orders if oid.startswith("MOCK-ORDER-")]
         self._seq = itertools.count(max(numbers, default=0) + 1)
 
+        # Rehydrate reserved buying power for open buy orders so a restart does
+        # not let overlapping resting buys overdraw cash.
+        self._reserved = {}
+        for rec in self._orders.values():
+            if rec["status"] in _TERMINAL_STATUSES or rec["side"] != "buy":
+                continue
+            px = (
+                rec["limit_price"]
+                if rec["order_type"] == "limit" and rec["limit_price"]
+                else self._prices.get(rec["symbol"], 0.0)
+            )
+            self._reserved[rec["id"]] = rec["quantity"] * px
+
     # ------------------------------------------------------------------ prices
+    def _synthetic_price(self, symbol: str) -> float:
+        """Stable, deterministic price for a symbol with no known quote."""
+        digest = hashlib.sha256(symbol.encode()).hexdigest()
+        return round(10.0 + (int(digest[:12], 16) % 49_000) / 100.0, 2)
+
     def price_for(self, symbol: str) -> float:
-        """Deterministic price per symbol; unknown tickers get a stable hash price."""
+        """Deterministic price per symbol; unknown tickers get a stable hash price.
+
+        Read-only: unknown symbols are not added to the price table, so merely
+        querying a position or equity does not mutate broker state or alter the
+        random walk used by ``tick()``.
+        """
         symbol = symbol.upper()
-        if symbol not in self._prices:
-            digest = hashlib.sha256(symbol.encode()).hexdigest()
-            self._prices[symbol] = round(10.0 + (int(digest[:12], 16) % 49_000) / 100.0, 2)
-        return self._prices[symbol]
+        if symbol in self._prices:
+            return self._prices[symbol]
+        return self._synthetic_price(symbol)
 
     def equity_value(self) -> float:
         total = self._cash
@@ -153,10 +176,12 @@ class MockAlpacaService(BrokerService):
 
     # ----------------------------------------------------------------- account
     async def get_account(self) -> AccountInfo:
+        reserved = sum(self._reserved.values())
+        available = max(self._cash - reserved, 0.0)
         return AccountInfo(
             equity=round(self.equity_value(), 2),
             cash=round(max(self._cash, 0.0), 2),
-            buying_power=round(max(self._cash, 0.0), 2),
+            buying_power=round(available, 2),
             paper=self.paper,
         )
 
@@ -221,9 +246,13 @@ class MockAlpacaService(BrokerService):
             price = self.price_for(symbol)
             if side == "buy":
                 cost = quantity * (limit_price if order_type == "limit" else price)
-                if cost > self._cash + 1e-6:
+                # Reserve already-accepted open buys so two resting limit buys
+                # can't both fill and overdraw cash below zero.
+                reserved = sum(self._reserved.values())
+                available = self._cash - reserved
+                if cost > available + 1e-6:
                     raise InsufficientFundsError(
-                        f"insufficient funds: need ${cost:.2f}, available ${self._cash:.2f}"
+                        f"insufficient funds: need ${cost:.2f}, available ${available:.2f}"
                     )
             else:
                 held = self._positions.get(symbol, {}).get("quantity", 0)
@@ -248,6 +277,8 @@ class MockAlpacaService(BrokerService):
                 "reject_reason": None,
             }
             self._orders[order_id] = record
+            if side == "buy":
+                self._reserved[order_id] = cost
 
             if order_type == "market":
                 self._fill(order_id, price)
@@ -257,11 +288,13 @@ class MockAlpacaService(BrokerService):
                 ) or (side == "sell" and limit_price <= price)
                 if marketable:
                     self._fill(order_id, min(price, float(limit_price)) if side == "buy" else max(price, float(limit_price)))
-            self._save()
+            await asyncio.to_thread(self._save)
             return self._to_broker_order(record)
 
     def _fill(self, order_id: str, price: float) -> None:
         order = self._orders[order_id]
+        # Buying power reserved for this open buy order is consumed by the fill.
+        self._reserved.pop(order_id, None)
         qty = order["quantity"]
         order["filled_quantity"] = qty
         order["avg_fill_price"] = round(price, 2)
@@ -312,7 +345,8 @@ class MockAlpacaService(BrokerService):
                     f"cannot cancel order {order_id} in terminal status {record['status']}"
                 )
             record["status"] = "CANCELED"
-            self._save()
+            self._reserved.pop(order_id, None)
+            await asyncio.to_thread(self._save)
             return self._to_broker_order(record)
 
     async def get_market_data(self, symbol: str) -> MarketTick:
@@ -343,7 +377,7 @@ class MockAlpacaService(BrokerService):
                 if crosses:
                     self._fill(order_id, price)
                     filled.append(order_id)
-            self._save()
+            await asyncio.to_thread(self._save)
             return filled
 
     def reset(self) -> None:
@@ -351,6 +385,7 @@ class MockAlpacaService(BrokerService):
         self._cash = self._initial_cash
         self._positions.clear()
         self._orders.clear()
+        self._reserved.clear()
         self._prices = {k: float(v) for k, v in BASE_PRICES.items()}
         self._seq = itertools.count(1)
         if self._persist_path:
@@ -359,3 +394,21 @@ class MockAlpacaService(BrokerService):
             except FileNotFoundError:
                 pass
             self._save()
+
+    async def force_fill(self, order_id: str) -> BrokerOrder:
+        """Demo shortcut: immediately fill a resting limit order at its price.
+
+        Public replacement for the admin endpoint reaching into private
+        ``_fill``/``_lock`` internals; performs a real fill + state save.
+        """
+        async with self._lock:
+            record = self._orders.get(order_id)
+            if record is None:
+                raise OrderNotFoundError(f"order {order_id} not found")
+            if record["status"] in _TERMINAL_STATUSES:
+                raise InvalidOrderError(
+                    f"order {order_id} already terminal ({record['status']})"
+                )
+            self._fill(order_id, self.price_for(record["symbol"]))
+            await asyncio.to_thread(self._save)
+            return self._to_broker_order(record)

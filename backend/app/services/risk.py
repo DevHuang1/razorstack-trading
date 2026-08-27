@@ -8,7 +8,7 @@ reject when nothing can be traded.
 import logging
 import math
 
-from app.integrations.base import BrokerService
+from app.integrations.base import BrokerError, BrokerService
 from app.schemas.risk import RiskDecisionStatus, RiskResult
 from app.schemas.trade import TradeProposal
 from app.services.portfolio import PortfolioService
@@ -21,6 +21,7 @@ CODE_POSITION_CAP = "POSITION_CAP"
 CODE_SECTOR_CAP = "SECTOR_CAP"
 CODE_INSUFFICIENT_CASH = "INSUFFICIENT_CASH"
 CODE_NO_PRICE = "NO_PRICE"
+CODE_INSUFFICIENT_POSITION = "INSUFFICIENT_POSITION"
 
 _REJECT_REASONS = {
     CODE_POSITION_CAP: "position cap exceeded for symbol",
@@ -88,6 +89,18 @@ class RiskEngine:
 
         # ---- sells reduce exposure ---------------------------------------
         if proposal.side.value == "sell":
+            held = sum(
+                p.quantity for p in snapshot.positions if p.symbol == proposal.symbol.upper()
+            )
+            if proposal.quantity > held:
+                return self._reject(
+                    CODE_INSUFFICIENT_POSITION,
+                    f"cannot sell {proposal.quantity} {proposal.symbol}: "
+                    f"only {held} share(s) held (no shorting)",
+                    proposal.quantity,
+                    metrics,
+                    details,
+                )
             details["post_trade_cash"] = round(cash + notional, 2)
             return RiskResult(
                 status=RiskDecisionStatus.APPROVED,
@@ -176,7 +189,12 @@ class RiskEngine:
     async def _reference_price(self, proposal: TradeProposal) -> float:
         if proposal.limit_price is not None:
             return float(proposal.limit_price)
-        tick = await self.broker.get_market_data(proposal.symbol)
+        try:
+            tick = await self.broker.get_market_data(proposal.symbol)
+        except BrokerError:
+            # No quote / unknown symbol: let the NO_PRICE rejection path handle it
+            # rather than bubbling up as a 502 broker error.
+            return 0.0
         return float(tick.price)
 
     def _score(self, metrics: dict) -> float:
