@@ -107,6 +107,30 @@ def test_execute_reruns_risk_for_rejected_proposal(client: TestClient):
     assert body["order"] is None
 
 
+async def test_execute_upserts_single_decision_row(client: TestClient):
+    created = client.post(
+        "/trades/propose",
+        json=payload(symbol="NVDA", quantity=1_000_000, order_type="limit", limit_price=50_000.0),
+    ).json()
+    pid = created["proposal"]["id"]
+    # Re-running risk on a rejected proposal must update the decision, not append.
+    client.post("/trades/execute", json={"proposal_id": pid})
+    client.post("/trades/execute", json={"proposal_id": pid})
+
+    from app.models.risk_decision import RiskDecisionModel
+    from sqlalchemy import func, select
+
+    async with client.app.state.session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(RiskDecisionModel)
+                .where(RiskDecisionModel.proposal_id == pid)
+            )
+        ).scalar()
+    assert count == 1
+
+
 def test_cancel_open_limit_order_then_conflict_on_repeat(client: TestClient):
     created = client.post(
         "/trades/propose",

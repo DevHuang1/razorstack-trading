@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: str = "*"
 
+    # --- Security ---
+    # When set, all mutating/admin endpoints require this key via the
+    # `X-API-Key` header (or `Authorization: Bearer <key>`). Empty = auth disabled
+    # (development / tests). Generate a strong value (e.g. `openssl rand -hex 32`).
+    api_key: str = ""
+
     # --- Database ---
     database_url: str = "sqlite+aiosqlite:///./trading_dev.db"
     auto_create_db: bool = True
@@ -74,6 +80,11 @@ class Settings(BaseSettings):
     mock_initial_cash: float = 100_000.0
     mock_price_tick_seconds: float = 5.0
     order_poll_seconds: float = 2.0
+    maintenance_interval_seconds: float = 3600.0
+
+    # --- Retention (0 disables pruning) ---
+    event_retention_days: int = 30
+    snapshot_retention_days: int = 30
     # JSON file the mock broker snapshots state to across restarts; "" disables.
     mock_state_path: str = ".mock_broker_state.json"
 

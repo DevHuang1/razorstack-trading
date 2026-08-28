@@ -87,7 +87,15 @@ async def test_drawdown_halt_rejects_everything(services):
     assert result.code == "DRAWDOWN_HALT"
 
 
-async def test_sell_approved_even_without_holdings(services):
+async def test_sell_rejected_without_holdings(services):
+    result = await services.risk.evaluate(prop("KO", 5, side=TradeSide.SELL))
+    assert result.status == RiskDecisionStatus.REJECTED
+    assert result.code == "INSUFFICIENT_POSITION"
+    assert result.approved_quantity == 0
+
+
+async def test_sell_approved_with_sufficient_holdings(services):
+    await services.broker.submit_order(symbol="KO", side="buy", quantity=10, order_type="market")
     result = await services.risk.evaluate(prop("KO", 5, side=TradeSide.SELL))
     assert result.status == RiskDecisionStatus.APPROVED
     assert result.approved_quantity == 5

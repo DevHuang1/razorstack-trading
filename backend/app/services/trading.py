@@ -4,6 +4,7 @@ The public pipeline is `propose()` / `execute()`. Nothing ever reaches the
 broker without a risk decision, and every step emits an event so the AI and
 frontend teams can follow the full lifecycle over /events or the WebSocket.
 """
+import asyncio
 import logging
 from uuid import uuid4
 
@@ -42,6 +43,9 @@ class TradingService:
         self.risk = risk
         self.orders = orders
         self.bus = bus
+        # Serializes the risk-evaluate -> place-order critical section so two
+        # concurrent proposals can't both read the same snapshot and over-trade.
+        self._lock = asyncio.Lock()
 
     # ----------------------------------------------------------------- public
     async def propose(self, proposal: TradeProposal) -> ProposeResponse:
@@ -90,6 +94,10 @@ class TradingService:
 
     # ---------------------------------------------------------------- internal
     async def _process(self, proposal: TradeProposal) -> ProposeResponse:
+        async with self._lock:
+            return await self._run_pipeline(proposal)
+
+    async def _run_pipeline(self, proposal: TradeProposal) -> ProposeResponse:
         out = await self._persist_proposal(proposal)
         await self.bus.publish(
             EventType.TRADE_PROPOSED.value,
@@ -132,15 +140,34 @@ class TradingService:
                 message=f"trade rejected: {decision.reason}",
             )
 
-        order = await self.orders.place_order(
-            proposal_id=proposal.id,
-            agent_id=proposal.agent_id,
-            symbol=proposal.symbol,
-            side=proposal.side.value,
-            quantity=decision.approved_quantity,
-            order_type=proposal.order_type.value,
-            limit_price=proposal.limit_price,
-        )
+        try:
+            order = await self.orders.place_order(
+                proposal_id=proposal.id,
+                agent_id=proposal.agent_id,
+                symbol=proposal.symbol,
+                side=proposal.side.value,
+                quantity=decision.approved_quantity,
+                order_type=proposal.order_type.value,
+                limit_price=proposal.limit_price,
+            )
+        except Exception as exc:
+            logger.exception("order placement failed after risk approval")
+            await self.bus.publish(
+                EventType.ORDER_FAILED.value,
+                {
+                    "proposal_id": proposal.id,
+                    "symbol": proposal.symbol,
+                    "error": str(exc),
+                },
+            )
+            out = await self._set_proposal_status(proposal.id, ProposalStatus.REJECTED.value)
+            return ProposeResponse(
+                proposal=out,
+                risk=decision,
+                order=None,
+                message=f"order rejected by broker: {exc}",
+            )
+
         await self.bus.publish(
             EventType.ORDER_SUBMITTED.value,
             {"order_id": order.id, "proposal_id": proposal.id, "symbol": order.symbol, "quantity": order.quantity},
@@ -208,20 +235,25 @@ class TradingService:
             return TradeProposalOut.model_validate(row)
 
     async def _persist_decision(self, decision: RiskResult, proposal_id: str) -> None:
+        # Upsert by proposal_id so re-running risk (e.g. via /trades/execute on a
+        # rejected proposal) updates the existing decision instead of appending
+        # a new row every time. One decision per proposal.
         async with self.session_factory() as session:
-            session.add(
-                RiskDecisionModel(
-                    id=str(uuid4()),
-                    proposal_id=proposal_id,
-                    status=decision.status.value,
-                    reason=decision.reason,
-                    code=decision.code,
-                    risk_score=decision.risk_score,
-                    original_quantity=decision.original_quantity,
-                    approved_quantity=decision.approved_quantity,
-                    details=decision.details,
+            existing = (
+                await session.execute(
+                    select(RiskDecisionModel).where(RiskDecisionModel.proposal_id == proposal_id)
                 )
-            )
+            ).scalar_one_or_none()
+            if existing is None:
+                existing = RiskDecisionModel(id=str(uuid4()), proposal_id=proposal_id)
+                session.add(existing)
+            existing.status = decision.status.value
+            existing.reason = decision.reason
+            existing.code = decision.code
+            existing.risk_score = decision.risk_score
+            existing.original_quantity = decision.original_quantity
+            existing.approved_quantity = decision.approved_quantity
+            existing.details = decision.details
             await session.commit()
 
     async def _get_proposal_row(self, proposal_id: str) -> TradeProposalModel:

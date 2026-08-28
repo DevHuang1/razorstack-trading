@@ -213,3 +213,15 @@ class PortfolioService:
             if stale:
                 await session.execute(delete(PositionModel).where(PositionModel.symbol.in_(stale)))
             await session.commit()
+
+    async def prune_snapshots(self, days: int) -> int:
+        """Delete persisted portfolio snapshots older than ``days`` (0 disables)."""
+        if days <= 0:
+            return 0
+        cutoff = utcnow() - timedelta(days=days)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                delete(PortfolioSnapshotModel).where(PortfolioSnapshotModel.created_at < cutoff)
+            )
+            await session.commit()
+            return result.rowcount or 0
