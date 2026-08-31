@@ -18,7 +18,7 @@ describe("AgentMascot", () => {
   );
 
   it("exposes the requested animation state without changing the stable identity label", () => {
-    render(<AgentMascot role="market" state="thinking" />);
+    render(<AgentMascot role="market_research" state="thinking" />);
 
     const mascot = screen.getByLabelText("Vector, Market Structure");
     expect(mascot).toHaveAttribute("data-mascot-state", "thinking");
@@ -26,9 +26,9 @@ describe("AgentMascot", () => {
   });
 
   it("renders a compact mascot without requiring a label", () => {
-    render(<AgentMascot role="cio" size="sm" />);
+    render(<AgentMascot role="investment_committee" size="sm" />);
 
-    expect(screen.queryByText(AGENT_PROFILES.cio.name)).not.toBeInTheDocument();
+    expect(screen.queryByText(AGENT_PROFILES.investment_committee.name)).not.toBeInTheDocument();
     expect(screen.getByLabelText("North, Chief Investment Officer")).toBeInTheDocument();
   });
 });

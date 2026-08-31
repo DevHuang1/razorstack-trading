@@ -4,9 +4,35 @@ import { useCallback, useMemo, useState } from "react";
 import { AgentMascot, type MascotState } from "@/components/AgentMascot";
 import { AGENT_PROFILES } from "@/lib/agents/profiles";
 import { useAgentStatusStream } from "@/lib/agents/use-agent-status";
-import type { AgentMessage, AgentRole, AIThesis, PipelineEvent } from "@/lib/contracts/research";
+import type { AgentRole } from "@/lib/contracts/research";
 
-const AGENT_ORDER: AgentRole[] = ["news", "market", "bull", "bear", "cio"];
+interface AgentMessage {
+  role: AgentRole;
+  stance: "bullish" | "bearish" | "neutral";
+  headline: string;
+  body: string;
+  confidence: number | null;
+}
+
+interface AIThesis {
+  symbol: string;
+  direction: string;
+  confidence: number;
+  summary: string;
+  catalysts: string[];
+  risks: string[];
+  recommendation: string;
+}
+
+interface StreamEvent {
+  type: string;
+  step?: string;
+  detail?: string;
+  message?: AgentMessage;
+  thesis?: AIThesis;
+}
+
+const AGENT_ORDER: AgentRole[] = ["news", "market_research", "bull", "bear", "investment_committee"];
 
 const STANCE_STYLES: Record<AgentMessage["stance"], string> = {
   bullish: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
@@ -109,13 +135,13 @@ export default function ResearchDeskPage() {
         buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
-          const pipelineEvent = JSON.parse(line) as PipelineEvent;
-          if (pipelineEvent.type === "status") setStatus(pipelineEvent.detail ?? pipelineEvent.step);
-          if (pipelineEvent.type === "agent_message") {
-            setMessages((current) => ({ ...current, [pipelineEvent.message.role]: pipelineEvent.message }));
+          const event = JSON.parse(line) as StreamEvent;
+          if (event.type === "status") setStatus(event.detail ?? event.step ?? "running");
+          if (event.type === "agent_message" && event.message) {
+            setMessages((current) => ({ ...current, [event.message!.role]: event.message }));
           }
-          if (pipelineEvent.type === "thesis") setThesis(pipelineEvent.thesis);
-          if (pipelineEvent.type === "error") setError(pipelineEvent.message);
+          if (event.type === "thesis" && event.thesis) setThesis(event.thesis);
+          if (event.type === "error") setError(event.detail ?? "Unknown error");
         }
       }
       setStatus("Desk synthesis complete");
@@ -190,7 +216,7 @@ export default function ResearchDeskPage() {
             {thesis ? (
               <>
                 <div className="mt-3 flex items-center gap-3">
-                  <AgentMascot role="cio" size="md" showLabel />
+                  <AgentMascot role="investment_committee" size="md" showLabel />
                   <span className="rounded-full border border-violet-300/30 px-2 py-1 text-xs text-violet-200">{thesis.direction} · {thesis.confidence}%</span>
                 </div>
                 <h2 className="mt-5 text-xl font-semibold leading-7">{thesis.summary}</h2>
@@ -202,7 +228,7 @@ export default function ResearchDeskPage() {
               </>
             ) : (
               <div className="flex min-h-48 flex-col justify-center">
-                <AgentMascot role="cio" size="lg" state={mascotStateFor("cio")} showLabel />
+                <AgentMascot role="investment_committee" size="lg" state={mascotStateFor("investment_committee")} showLabel />
                 <p className="mt-5 text-sm leading-6 text-zinc-400">Run the desk to let North synthesize the four specialist reports into one transparent thesis.</p>
               </div>
             )}

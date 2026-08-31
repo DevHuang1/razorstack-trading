@@ -5,7 +5,7 @@ import { AGENT_PROFILES } from "@/lib/agents/profiles";
 import type { AgentRole } from "@/lib/contracts/research";
 import ResearchDeskPage from "./page";
 
-const roles: AgentRole[] = ["news", "market", "bull", "bear", "cio"];
+const roles: AgentRole[] = ["news", "market_research", "bull", "bear", "investment_committee"];
 
 function streamedResearchResponse(): Response {
   const events = [
@@ -14,7 +14,7 @@ function streamedResearchResponse(): Response {
       type: "agent_message",
       message: {
         role,
-        stance: role === "bear" ? "bearish" : role === "cio" ? "neutral" : "bullish",
+        stance: role === "bear" ? "bearish" : role === "investment_committee" ? "neutral" : "bullish",
         headline: `${AGENT_PROFILES[role].name} report for AAPL`,
         body: `${AGENT_PROFILES[role].title} report body`,
         confidence: 70,
