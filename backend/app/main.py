@@ -64,6 +64,42 @@ async def _tick_loop(app: FastAPI) -> None:
             logger.exception("mock tick loop iteration failed")
 
 
+async def _reconcile_loop(app: FastAPI) -> None:
+    """Alpaca heartbeat: poll open orders and emit fills as they complete.
+
+    The mock broker fills synchronously inside ``tick()``; the real Alpaca broker
+    fills asynchronously, so without this loop local order state would never be
+    reconciled (orders would stay SUBMITTED forever) and the event stream would
+    miss ORDER_FILLED events.
+    """
+    orders = app.state.orders
+    interval = float(app.state.settings.order_poll_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            filled = await orders.reconcile_open_orders()
+            if filled:
+                await routes_admin.publish_fills(app, filled)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("order reconciliation loop iteration failed")
+
+
+async def _maintenance_loop(app: FastAPI) -> None:
+    """Periodically prune old events / snapshots so tables don't grow unbounded."""
+    interval = float(app.state.settings.maintenance_interval_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await app.state.bus.prune(app.state.settings.event_retention_days)
+            await app.state.portfolio.prune_snapshots(app.state.settings.snapshot_retention_days)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("maintenance loop iteration failed")
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
@@ -75,13 +111,18 @@ async def lifespan(app: FastAPI):
     task = None
     if settings.broker_mode == "mock":
         task = asyncio.create_task(_tick_loop(app))
+    else:
+        task = asyncio.create_task(_reconcile_loop(app))
+    maintenance = asyncio.create_task(_maintenance_loop(app))
     try:
+        # Rehydrate the in-memory event buffer so /events/recent matches history.
+        await app.state.bus.replay()
         yield
     finally:
-        if task is not None:
-            task.cancel()
+        for t in (task, maintenance):
+            t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await task
+                await t
         await app.state.engine.dispose()
 
 
@@ -120,7 +161,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bus = EventBus(session_factory)
     trading = TradingService(session_factory, portfolio, risk, orders, bus)
 
-    app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+    app = FastAPI(
+        title=settings.app_name,
+        version="1.0.0",
+        lifespan=lifespan,
+        debug=settings.debug,
+    )
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory

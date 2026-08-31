@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_orders
+from app.core.auth import require_api_key
 from app.schemas.order import OrderResult
 from app.schemas.trade import CancelTradeRequest
 from app.services.order_manager import OrderManager
@@ -18,7 +19,7 @@ async def list_orders(
     return await orders.list_orders(limit=limit, status=status)
 
 
-@router.post("/cancel", response_model=OrderResult)
+@router.post("/cancel", response_model=OrderResult, dependencies=[Depends(require_api_key)])
 async def cancel_order_by_body(
     payload: CancelTradeRequest, orders: OrderManager = Depends(get_orders)
 ):
@@ -33,6 +34,6 @@ async def get_order(order_id: str, orders: OrderManager = Depends(get_orders)):
     return order
 
 
-@router.delete("/{order_id}", response_model=OrderResult)
+@router.delete("/{order_id}", response_model=OrderResult, dependencies=[Depends(require_api_key)])
 async def cancel_order(order_id: str, orders: OrderManager = Depends(get_orders)):
     return await orders.cancel_order(order_id)

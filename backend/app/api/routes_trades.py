@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_trading
+from app.core.auth import require_api_key
 from app.schemas.order import OrderResult
 from app.schemas.trade import (
     CancelTradeRequest,
@@ -15,13 +16,13 @@ from app.services.trading import TradingService
 router = APIRouter(prefix="/trades", tags=["trading"])
 
 
-@router.post("/propose", response_model=ProposeResponse)
+@router.post("/propose", response_model=ProposeResponse, dependencies=[Depends(require_api_key)])
 async def propose_trade(payload: TradeProposal, trading: TradingService = Depends(get_trading)):
     """Submit an agent proposal: risk-checked, then executed if approved."""
     return await trading.propose(payload)
 
 
-@router.post("/execute", response_model=ProposeResponse)
+@router.post("/execute", response_model=ProposeResponse, dependencies=[Depends(require_api_key)])
 async def execute_proposal(
     payload: ExecuteTradeRequest, trading: TradingService = Depends(get_trading)
 ):
@@ -29,7 +30,7 @@ async def execute_proposal(
     return await trading.execute(payload)
 
 
-@router.post("/cancel", response_model=OrderResult)
+@router.post("/cancel", response_model=OrderResult, dependencies=[Depends(require_api_key)])
 async def cancel_order(payload: CancelTradeRequest, trading: TradingService = Depends(get_trading)):
     return await trading.cancel_order(payload.order_id)
 

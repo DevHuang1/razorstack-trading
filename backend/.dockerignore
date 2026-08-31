@@ -1,0 +1,18 @@
+# Never bake secrets or local state into the image.
+.env
+.env.example
+*.db
+*.sqlite3
+
+# Python / tooling noise
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Not needed at runtime
+tests/
+scripts/
+*.md

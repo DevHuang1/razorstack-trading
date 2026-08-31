@@ -81,9 +81,14 @@ class AlpacaService(BrokerService):
         )
         self._token_expires_at: datetime | None = None
         if client_id and client_secret and not oauth_token:
-            oauth_token = self._fetch_token()
-            if not oauth_token:
-                raise BrokerError("alpaca oauth token exchange returned no token")
+            # Defer the OAuth exchange to the first API call so constructing the
+            # service (e.g. at import / app startup) never performs network I/O.
+            # "pending-refresh" is replaced with the real token on first _call.
+            oauth_token = "pending-refresh"
+            self._token_expires_at = None
+        elif oauth_token:
+            # A token was supplied; treat it as long-lived and don't refresh it.
+            self._token_expires_at = utcnow() + timedelta(days=365)
         if not api_key and not oauth_token:
             raise BrokerError(
                 "set ALPACA_API_KEY/ALPACA_SECRET_KEY or "
@@ -99,6 +104,9 @@ class AlpacaService(BrokerService):
         url_override = base_url or None
         # alpaca-py rejects passing both a key pair and an oauth_token.
         use_token = bool(oauth_token)
+        # Persist the token (real, supplied, or the "pending-refresh" sentinel)
+        # so _ensure_fresh_token can refresh it lazily on first use.
+        self._oauth_token = oauth_token
         self._trading = TradingClient(
             api_key=None if use_token else api_key,
             secret_key=None if use_token else secret_key,
@@ -144,12 +152,19 @@ class AlpacaService(BrokerService):
         return token
 
     def _ensure_fresh_token(self) -> None:
-        """Refresh the OAuth token when it is at/near expiry (no-op for keys)."""
+        """Refresh the OAuth token when it is at/near expiry (no-op for keys).
+
+        The initial token is fetched here on first use (see ``__init__``), so no
+        network call happens at construction time.
+        """
         if not (self._client_id and self._client_secret):
             return  # static API key pair; nothing to refresh
-        if self._token_expires_at is not None and utcnow() < (
-            self._token_expires_at
-            - timedelta(seconds=self._TOKEN_REFRESH_BUFFER_SECONDS)
+        if (
+            self._oauth_token
+            and self._oauth_token != "pending-refresh"
+            and self._token_expires_at is not None
+            and utcnow()
+            < self._token_expires_at - timedelta(seconds=self._TOKEN_REFRESH_BUFFER_SECONDS)
         ):
             return
         try:
@@ -158,6 +173,7 @@ class AlpacaService(BrokerService):
             logger.warning("alpaca oauth token refresh failed", exc_info=True)
             return
         # RESTClient reads _oauth_token on every request, so update in place.
+        self._oauth_token = token
         self._trading._oauth_token = token
         self._data._oauth_token = token
 
@@ -300,15 +316,24 @@ class AlpacaService(BrokerService):
         from alpaca.trading.requests import GetOrdersRequest
 
         open_statuses = {"OPEN", "PENDING", "SUBMITTED", "PARTIALLY_FILLED"}
-        query_status = (
-            QueryOrderStatus.OPEN if (status or "").upper() in open_statuses else QueryOrderStatus.CLOSED
-        )
+        wanted = (status or "").upper()
+        query_status = None
+        if wanted:
+            # Alpaca only exposes OPEN/CLOSED query buckets; fetch the matching
+            # bucket, then filter precisely on the requested status so e.g.
+            # ?status=FILLED returns only filled orders, not every closed one.
+            query_status = (
+                QueryOrderStatus.OPEN if wanted in open_statuses else QueryOrderStatus.CLOSED
+            )
         request = GetOrdersRequest(status=query_status, limit=min(int(limit), 500))
         try:
             raw_orders = await self._call(self._trading.get_orders, request)
         except Exception as exc:
             raise BrokerError(f"alpaca get_orders failed: {exc}") from exc
-        return [self._map_order(o) for o in raw_orders]
+        orders = [self._map_order(o) for o in raw_orders]
+        if wanted:
+            orders = [o for o in orders if o.status == wanted]
+        return orders
 
     # ------------------------------------------------------------- market data
     async def get_market_data(self, symbol: str) -> MarketTick:

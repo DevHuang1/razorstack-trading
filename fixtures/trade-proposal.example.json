@@ -1,0 +1,60 @@
+{
+  "symbol": "NVDA",
+  "action": "BUY",
+  "strategy": "bull_call_spread",
+  "instrument": null,
+  "thesis": "Committee synthesis for NVDA: the bullish reading prevails on advocate conviction (68% vs 44%) with high evidence quality and a noted bull/bear conflict retained in contradicting factors. Recommendation: BUY via bull_call_spread. This is an AI research proposal requiring risk approval - not an executed or executable order.",
+  "confidence": 0.58,
+  "supporting_factors": [
+    {
+      "kind": "interpretation",
+      "statement": "Trend and momentum labels align, supporting continued upside participation"
+    },
+    {
+      "kind": "interpretation",
+      "statement": "Provided news flow skews constructive, backing the demand narrative"
+    },
+    {
+      "kind": "observation",
+      "statement": "Key cited evidence behind the decision: \"News catalyst on record: \"NVDA beats quarterly earnings and raises data-center guidance (source: Reuters)\"\""
+    },
+    {
+      "kind": "observation",
+      "statement": "Shared market labels both advocates reason over: trend \"up\", momentum \"positive\", volatility regime \"low\""
+    }
+  ],
+  "contradicting_factors": [
+    {
+      "kind": "interpretation",
+      "statement": "Upside case depends on the provided \"positive\" momentum persisting; mean reversion after such readings is a concrete failure path"
+    },
+    {
+      "kind": "interpretation",
+      "statement": "Provided coverage already contains explicit headwinds that offset the cited catalysts"
+    }
+  ],
+  "risks": [
+    {
+      "kind": "interpretation",
+      "statement": "Strongest risk under review: Analyst flags potential margin pressure from rising input costs (source: Bloomberg)"
+    },
+    {
+      "kind": "interpretation",
+      "statement": "Strongest risk under review: Market labels under challenge: trend \"up\", momentum \"positive\", volatility regime \"low\""
+    }
+  ],
+  "invalidation_conditions": [
+    "Market trend label flips away from \"up\"",
+    "Aggregate news sentiment falls below the currently provided 0.2 reading",
+    "A bearish material event emerges that outweighs the cited catalysts",
+    "bearish advocate's failure scenario to monitor: Trend label strengthens beyond \"up\" with improving breadth"
+  ],
+  "portfolio_considerations": [
+    {
+      "kind": "observation",
+      "statement": "Adding this position would introduce a new sector exposure (Semiconductors)"
+    }
+  ],
+  "requires_risk_approval": true,
+  "generated_at": "2026-08-24T15:00:00.000Z"
+}
