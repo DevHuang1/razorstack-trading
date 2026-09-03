@@ -1,77 +1,39 @@
-import { buildResearchInput, runResearchPipeline } from "@/lib/agents/cio";
-import { AnalyzeOpportunityInputSchema, type AnalyzeOpportunityInput, type PipelineEvent } from "@/lib/contracts/research";
-
+import { NextRequest } from "next/server";
+import { fetchMarketData } from "@/lib/agents/market-data";
+import { runNewsAgent, runMarketResearchAgent, runBullAgent, runBearAgent, runCIOAgent, runCrisisNewsAgent, runCrisisMarketAgent, runCrisisRiskAgent, runCrisisOptionsAgent, runCrisisCommitteeAgent } from "@/lib/agents/agents";
 export const dynamic = "force-dynamic";
-
-function symbolFromRequest(request: Request): string {
-  if (request.method === "POST") {
-    return "";
-  }
-  return new URL(request.url).searchParams.get("symbol") ?? "";
-}
-
-async function readBodyInput(request: Request): Promise<AnalyzeOpportunityInput | string | null> {
-  try {
-    const body = (await request.json()) as Record<string, unknown>;
-    if (typeof body.symbol === "string" && body.marketData === undefined) {
-      return body.symbol;
-    }
-    return AnalyzeOpportunityInputSchema.parse(body);
-  } catch {
-    return null;
-  }
-}
-
-async function resolveInput(request: Request): Promise<AnalyzeOpportunityInput | Response> {
-  const candidate = request.method === "POST" ? await readBodyInput(request) : symbolFromRequest(request).trim();
-  if (candidate === null) {
-    return Response.json({ error: "Invalid request body" }, { status: 400 });
-  }
-  const symbol = typeof candidate === "string" ? candidate.trim() : candidate.symbol;
-  if (!symbol || !/^[A-Za-z]{1,6}$/.test(symbol)) {
-    return Response.json({ error: "Provide a valid ticker symbol, e.g. NVDA" }, { status: 400 });
-  }
-  if (typeof candidate === "string") {
-    try {
-      return await buildResearchInput(candidate);
-    } catch {
-      return Response.json({ error: `No market data available for ${candidate}` }, { status: 404 });
-    }
-  }
-  return candidate;
-}
-
-async function handleResearch(request: Request): Promise<Response> {
-  const resolved = await resolveInput(request);
-  if (resolved instanceof Response) {
-    return resolved;
-  }
-
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
+export const maxDuration = 120;
+const enc = new TextEncoder();
+function ndjson(o) { return enc.encode(JSON.stringify(o) + "\n"); }
+function status(s, d) { return ndjson({ type: "status", step: s, detail: d }); }
+export async function POST(req) {
+  const body = await req.json().catch(() => null);
+  const symbol = body?.symbol.trim().toUpperCase();
+  if (!symbol) return new Response(ndjson({ type: "error", step: "validate", detail: "Invalid symbol" }), { status: 400, headers: { "Content-Type": "application/x-ndjson" } });
+  const crisis = Boolean(body?.crisis);
+  const stream = new ReadableStream({
     async start(controller) {
-      const send = (event: PipelineEvent) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-      };
-      for await (const event of runResearchPipeline(resolved)) {
-        send(event);
-      }
-      controller.close();
-    },
+      const enq = c => { try { controller.enqueue(c); } catch {} };
+      try {
+        enq(status("Fetching market data"));
+        const { snapshot, news } = await fetchMarketData(symbol);
+        if (crisis) {
+          const cN = await runCrisisNewsAgent(symbol, news); enq(ndjson({ type: "agent_message", message: cN }));
+          const cM = await runCrisisMarketAgent(symbol, snapshot); enq(ndjson({ type: "agent_message", message: cM }));
+          const cR = await runCrisisRiskAgent(symbol, snapshot, cM); enq(ndjson({ type: "agent_message", message: cR }));
+          const cO = await runCrisisOptionsAgent(symbol, snapshot); enq(ndjson({ type: "agent_message", message: cO }));
+          const { message, thesis } = await runCrisisCommitteeAgent(symbol, snapshot, cN, cM, cR, cO); enq(ndjson({ type: "agent_message", message })); enq(ndjson({ type: "thesis", thesis }));
+        } else {
+          const mN = await runNewsAgent(symbol, news); enq(ndjson({ type: "agent_message", message: mN }));
+          const mM = await runMarketResearchAgent(symbol, snapshot); enq(ndjson({ type: "agent_message", message: mM }));
+          const bM = await runBullAgent(symbol, snapshot, mN, mM); enq(ndjson({ type: "agent_message", message: bM }));
+          const beM = await runBearAgent(symbol, snapshot, mN, mM); enq(ndjson({ type: "agent_message", message: beM }));
+          const { message, thesis } = await runCIOAgent(symbol, snapshot, mN, mM, bM, beM); enq(ndjson({ type: "agent_message", message })); enq(ndjson({ type: "thesis", thesis }));
+        }
+        enq(ndjson({ type: "done" }));
+      } catch (e) { enq(ndjson({ type: "error", step: "pipeline", detail: e?.message })); }
+      finally { try { controller.close(); } catch {} }
+    }
   });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-    },
-  });
-}
-
-export async function POST(request: Request): Promise<Response> {
-  return handleResearch(request);
-}
-
-export async function GET(request: Request): Promise<Response> {
-  return handleResearch(request);
+  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Transfer-Encoding": "chunked", "Cache-Control": "no-cache" } });
 }
