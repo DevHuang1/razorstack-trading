@@ -9,25 +9,70 @@ import type {
 } from "@/lib/quant/paper";
 import type { MarketRegime, QuantSignal, SignalResponse, StrategyId } from "@/lib/quant/types";
 
-type StrategyPerformance = {
-  strategyId: string;
-  horizonDays: number;
-  signalsEvaluated: number;
-  trades: number;
-  winRatePct: number;
-  avgTradeReturnPct: number;
-  grossCumulativeReturnPct: number;
-  netCumulativeReturnPct: number;
-  maxDrawdownPct: number;
-  sharpeAnnualized: number | null;
-  sortinoAnnualized: number | null;
-  calmarRatio: number | null;
-  turnover: number;
-  exposurePct: number;
-  buyHoldReturnPct: number;
-  benchmarkOutperformancePct: number;
-  avgCostPerTradeBps: number;
-};
+// ─── Health banner ────────────────────────────────────────────────────────────
+
+interface HealthReport {
+  alpaca: { configured: boolean; live: boolean; error?: string };
+  backend: { configured: boolean; live: boolean; url?: string; error?: string };
+}
+
+function ConnectionBanner() {
+  const [health, setHealth] = useState<HealthReport | null>(null);
+
+  useEffect(() => {
+    fetch("/api/quant/health")
+      .then((r) => r.json() as Promise<HealthReport>)
+      .then(setHealth)
+      .catch(() => null);
+  }, []);
+
+  if (!health) return null;
+
+  const items: { label: string; ok: boolean; note?: string }[] = [
+    {
+      label: "Alpaca",
+      ok: health.alpaca.live,
+      note: health.alpaca.configured
+        ? health.alpaca.live
+          ? "live bars"
+          : health.alpaca.error ?? "unreachable"
+        : "no API key — synthetic data",
+    },
+    {
+      label: "FastAPI backend",
+      ok: health.backend.live,
+      note: health.backend.configured
+        ? health.backend.live
+          ? health.backend.url
+          : health.backend.error ?? "unreachable"
+        : "BACKEND_API_URL not set",
+    },
+  ];
+
+  const allOk = items.every((i) => i.ok);
+  if (allOk) return null; // no noise when everything is connected
+
+  return (
+    <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+      <span className="mr-2 font-semibold text-amber-300">Data sources</span>
+      {items.map((item) => (
+        <span key={item.label} className="mr-4 inline-flex items-center gap-1">
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${item.ok ? "bg-emerald-400" : "bg-amber-400"}`}
+          />
+          <span className={item.ok ? "text-emerald-300" : "text-amber-300"}>
+            {item.label}
+          </span>
+          {item.note && (
+            <span className="text-zinc-500">— {item.note}</span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const DIRECTION_STYLES: Record<string, string> = {
   BUY: "text-emerald-400",
@@ -76,6 +121,36 @@ function RegimeBadge({ regime }: { regime: MarketRegime }) {
   );
 }
 
+// ─── Crisis alert strip ───────────────────────────────────────────────────────
+
+function CrisisStrip({ regime }: { regime: MarketRegime }) {
+  if (!regime.crisis && regime.volatility !== "VOLATILE") return null;
+  return (
+    <div
+      className={`mb-4 rounded-lg border px-4 py-2 text-xs font-medium ${
+        regime.crisis
+          ? "border-red-500/40 bg-red-500/10 text-red-200"
+          : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+      }`}
+    >
+      {regime.crisis ? (
+        <>
+          <span className="mr-2 font-bold text-red-300">CRISIS MODE</span>
+          Elevated tail risk detected — position sizes reduced (×{regime.riskMultiplier}). All
+          signals carry higher uncertainty.
+        </>
+      ) : (
+        <>
+          <span className="mr-2 font-bold text-amber-300">HIGH VOLATILITY</span>
+          {regime.label} — monitor drawdowns closely.
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Paper panel ──────────────────────────────────────────────────────────────
+
 function PaperPanel() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [records, setRecords] = useState<PaperRecord[]>([]);
@@ -97,7 +172,7 @@ function PaperPanel() {
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-      <h2 className="mb-4 text-lg font-semibold tracking-tight">Paper tracker & leaderboard</h2>
+      <h2 className="mb-4 text-lg font-semibold tracking-tight">Paper tracker &amp; leaderboard</h2>
 
       <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
         <span className="font-medium text-zinc-300">Tracked signals:</span> {records.length}
@@ -120,8 +195,7 @@ function PaperPanel() {
       </div>
 
       {entries.length === 0 ? (
-        <p className="text-sm text-zinc-500">No resolved trades yet. Log signals to the paper
-          tracker and they will appear here.</p>
+        <p className="text-sm text-zinc-500">No resolved trades yet. Log signals to the paper tracker and they will appear here.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -143,9 +217,7 @@ function PaperPanel() {
                   <td className="py-2 font-mono text-zinc-400">{e.total}</td>
                   <td className="py-2 font-mono text-zinc-400">{e.winRatePct}%</td>
                   <td className="py-2 font-mono text-zinc-400">{e.avgReturnPct}%</td>
-                  <td className="py-2 font-mono font-medium text-emerald-400">
-                    {e.cumulativeReturnPct}%
-                  </td>
+                  <td className="py-2 font-mono font-medium text-emerald-400">{e.cumulativeReturnPct}%</td>
                   <td className="py-2 font-mono text-rose-400">-{e.maxDrawdownPct}%</td>
                   <td className="py-2 font-mono text-zinc-400">{e.sharpeAnnualized ?? "n/a"}</td>
                 </tr>
@@ -157,6 +229,28 @@ function PaperPanel() {
     </section>
   );
 }
+
+// ─── Backtest panel ───────────────────────────────────────────────────────────
+
+type StrategyPerformance = {
+  strategyId: string;
+  horizonDays: number;
+  signalsEvaluated: number;
+  trades: number;
+  winRatePct: number;
+  avgTradeReturnPct: number;
+  grossCumulativeReturnPct: number;
+  netCumulativeReturnPct: number;
+  maxDrawdownPct: number;
+  sharpeAnnualized: number | null;
+  sortinoAnnualized: number | null;
+  calmarRatio: number | null;
+  turnover: number;
+  exposurePct: number;
+  buyHoldReturnPct: number;
+  benchmarkOutperformancePct: number;
+  avgCostPerTradeBps: number;
+};
 
 const STRATEGY_OPTIONS = listStrategies().map((s) => ({
   id: s.id,
@@ -182,9 +276,7 @@ function BacktestPanel() {
       });
       const json = (await res.json()) as StrategyPerformance | { error: string };
       if (!res.ok || "error" in json) {
-        throw new Error(
-          "error" in json ? json.error : `API returned ${res.status}`,
-        );
+        throw new Error("error" in json ? json.error : `API returned ${res.status}`);
       }
       setResult(json as StrategyPerformance);
     } catch (e) {
@@ -253,8 +345,12 @@ function BacktestPanel() {
           <Metric label="Turnover" value={result.turnover.toFixed(3)} />
           <Metric label="Exposure" value={`${result.exposurePct}%`} />
           <Metric label="Cost / trade" value={`${result.avgCostPerTradeBps} bps`} />
-          <Metric label="Buy & hold" value={`${result.buyHoldReturnPct}%`} />
-          <Metric label="vs benchmark" value={`${result.benchmarkOutperformancePct}%`} tone={result.benchmarkOutperformancePct >= 0 ? "good" : "bad"} />
+          <Metric label="Buy &amp; hold" value={`${result.buyHoldReturnPct}%`} />
+          <Metric
+            label="vs benchmark"
+            value={`${result.benchmarkOutperformancePct}%`}
+            tone={result.benchmarkOutperformancePct >= 0 ? "good" : "bad"}
+          />
         </div>
       )}
     </section>
@@ -271,6 +367,8 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
     </div>
   );
 }
+
+// ─── Signal card ──────────────────────────────────────────────────────────────
 
 function SignalCard({ signal }: { signal: QuantSignal }) {
   return (
@@ -316,7 +414,7 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
         ))}
       </div>
 
-      <h3 className="mt-5 mb-2 text-xs font-semibold tracking-wider text-zinc-500 uppercase">
+      <h3 className="mt-5 mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
         Strategy votes
       </h3>
       <div className="flex flex-wrap gap-2">
@@ -340,9 +438,7 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
       <dl className="mt-5 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
         <div>
           <dt className="text-zinc-500">Realized vol (ann.)</dt>
-          <dd className="font-mono text-zinc-300">
-            {signal.riskMetrics.realizedVolAnnualized}%
-          </dd>
+          <dd className="font-mono text-zinc-300">{signal.riskMetrics.realizedVolAnnualized}%</dd>
         </div>
         <div>
           <dt className="text-zinc-500">ATR</dt>
@@ -350,15 +446,11 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
         </div>
         <div>
           <dt className="text-zinc-500">Max drawdown (1y)</dt>
-          <dd className="font-mono text-zinc-300">
-            -{signal.riskMetrics.maxDrawdownPct}%
-          </dd>
+          <dd className="font-mono text-zinc-300">-{signal.riskMetrics.maxDrawdownPct}%</dd>
         </div>
         <div>
           <dt className="text-zinc-500">Sharpe (ann.)</dt>
-          <dd className="font-mono text-zinc-300">
-            {signal.riskMetrics.sharpeAnnualized ?? "n/a"}
-          </dd>
+          <dd className="font-mono text-zinc-300">{signal.riskMetrics.sharpeAnnualized ?? "n/a"}</dd>
         </div>
         <div>
           <dt className="text-zinc-500">Tail index (Hill)</dt>
@@ -376,15 +468,11 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
         </div>
         <div>
           <dt className="text-zinc-500">Risk budget</dt>
-          <dd className="font-mono text-zinc-300">
-            {signal.riskChecks.riskBudgetPct ?? "n/a"}%
-          </dd>
+          <dd className="font-mono text-zinc-300">{signal.riskChecks.riskBudgetPct ?? "n/a"}%</dd>
         </div>
         <div>
           <dt className="text-zinc-500">Stop dist. (2×ATR)</dt>
-          <dd className="font-mono text-zinc-300">
-            {signal.riskChecks.stopDistancePct ?? "n/a"}%
-          </dd>
+          <dd className="font-mono text-zinc-300">{signal.riskChecks.stopDistancePct ?? "n/a"}%</dd>
         </div>
       </dl>
 
@@ -409,6 +497,8 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
     </section>
   );
 }
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function QuantDeskPage() {
   const [symbolInput, setSymbolInput] = useState("NVDA,AAPL");
@@ -489,6 +579,10 @@ export default function QuantDeskPage() {
           </div>
         )}
       </header>
+
+      <ConnectionBanner />
+
+      {data && <CrisisStrip regime={data.regime} />}
 
       {loading && <p className="text-sm text-zinc-400">Computing signals…</p>}
       {error && <p className="text-sm text-rose-400">{error}</p>}
