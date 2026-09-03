@@ -32,6 +32,9 @@ export const MarketSnapshotSchema = z.object({
   regime: z.enum(["risk_on", "neutral", "risk_off"]),
   latestVolume: z.number().nonnegative().optional(),
   averageVolume30d: z.number().positive().optional(),
+  // Where the snapshot's price/indicator inputs came from. Exposed so the
+  // research desk can surface when it is running on offline/synthetic data.
+  dataSource: z.enum(["backend", "alpaca", "synthetic", "mock"]).optional(),
 });
 export type MarketSnapshot = z.infer<typeof MarketSnapshotSchema>;
 
@@ -278,6 +281,26 @@ export const TradeProposalWireSchema = z.object({
 });
 export type TradeProposalWire = z.infer<typeof TradeProposalWireSchema>;
 
+export const AgentMessageSchema = z.object({
+  role: AgentRoleSchema,
+  stance: StanceSchema,
+  headline: z.string(),
+  body: z.string(),
+  confidence: z.number().min(0).max(100).nullable(),
+});
+export type AgentMessage = z.infer<typeof AgentMessageSchema>;
+
+export const AIThesisSchema = z.object({
+  symbol: z.string(),
+  direction: z.string(),
+  confidence: z.number().min(0).max(100),
+  summary: z.string(),
+  catalysts: z.array(z.string()),
+  risks: z.array(z.string()),
+  recommendation: z.string(),
+});
+export type AIThesis = z.infer<typeof AIThesisSchema>;
+
 export const PipelineEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("status"), step: z.string(), detail: z.string().optional() }),
   z.object({ type: z.literal("market_analysis"), analysis: MarketAnalysisSchema }),
@@ -288,7 +311,14 @@ export const PipelineEventSchema = z.discriminatedUnion("type", [
     opinion: AgentOpinionSchema,
   }),
   z.object({ type: z.literal("trade_proposal"), proposal: TradeProposalWireSchema }),
-  z.object({ type: z.literal("error"), step: z.string(), message: z.string() }),
+  z.object({ type: z.literal("agent_message"), message: AgentMessageSchema }),
+  z.object({ type: z.literal("thesis"), thesis: AIThesisSchema }),
+  z.object({
+    type: z.literal("error"),
+    step: z.string(),
+    message: z.string(),
+    detail: z.string().optional(),
+  }),
   z.object({ type: z.literal("done") }),
 ]);
 export type PipelineEvent = z.infer<typeof PipelineEventSchema>;

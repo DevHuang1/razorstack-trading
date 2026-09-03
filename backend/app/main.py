@@ -146,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             token_url=settings.alpaca_token_url,
             oauth_token=settings.alpaca_oauth_token,
             oauth_scope=settings.alpaca_oauth_scope,
+            request_timeout=settings.alpaca_request_timeout,
         )
     else:
         from app.integrations.mock_alpaca import MockAlpacaService

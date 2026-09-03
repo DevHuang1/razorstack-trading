@@ -51,7 +51,15 @@ describe("runResearchPipeline (v2 DAG, mock mode)", () => {
   it("is deterministic for the same provider-backed input", async () => {
     const input = await buildResearchInput("AAPL");
     const [a, b] = await Promise.all([collectEvents(input), collectEvents(input)]);
-    expect(a).toEqual(b);
+    // generated_at is the wall-clock serialization stamp; determinism here is
+    // about agent output, so normalize it before comparing.
+    const normalize = (events: PipelineEvent[]) =>
+      events.map((event) =>
+        event.type === "trade_proposal"
+          ? { ...event, proposal: { ...event.proposal, generated_at: "" } }
+          : event,
+      );
+    expect(normalize(a)).toEqual(normalize(b));
   });
 
   it("yields an error event instead of throwing when agents fail", async () => {

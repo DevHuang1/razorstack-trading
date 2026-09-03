@@ -2,9 +2,10 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { AgentMascot, type MascotState } from "@/components/AgentMascot";
+import { ProposeToRiskGate } from "@/components/ProposeToRiskGate";
 import { AGENT_PROFILES } from "@/lib/agents/profiles";
 import { useAgentStatusStream } from "@/lib/agents/use-agent-status";
-import type { AgentRole } from "@/lib/contracts/research";
+import type { AgentRole, TradeProposalWire } from "@/lib/contracts/research";
 
 interface AgentMessage {
   role: AgentRole;
@@ -30,6 +31,7 @@ interface StreamEvent {
   detail?: string;
   message?: AgentMessage;
   thesis?: AIThesis;
+  proposal?: TradeProposalWire;
 }
 
 const AGENT_ORDER: AgentRole[] = ["news", "market_research", "bull", "bear", "investment_committee"];
@@ -83,9 +85,13 @@ export default function ResearchDeskPage() {
   const [symbol, setSymbol] = useState<string | null>(null);
   const [messages, setMessages] = useState<Partial<Record<AgentRole, AgentMessage>>>({});
   const [thesis, setThesis] = useState<AIThesis | null>(null);
+  const [proposal, setProposal] = useState<TradeProposalWire | null>(null);
   const [status, setStatus] = useState("Ready to run the desk");
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  // Set from the market_research status detail so the user can always tell when
+  // the desk is running on offline/synthetic data.
+  const [dataSource, setDataSource] = useState<string | null>(null);
   const { states: backendStates, updates: backendUpdates, connected: backendConnected } = useAgentStatusStream();
 
   const activeRole = useMemo(() => {
@@ -110,6 +116,7 @@ export default function ResearchDeskPage() {
     setSymbol(nextSymbol);
     setMessages({});
     setThesis(null);
+    setProposal(null);
     setError(null);
     setRunning(true);
     setStatus("Opening the research loop…");
@@ -136,11 +143,19 @@ export default function ResearchDeskPage() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line) as StreamEvent;
-          if (event.type === "status") setStatus(event.detail ?? event.step ?? "running");
+          if (event.type === "status") {
+            setStatus(event.detail ?? event.step ?? "running");
+            const m = /using (synthetic|mock) data/.exec(event.detail ?? "");
+            if (m) setDataSource(m[1]);
+            if (event.detail === "completed" && event.step === "market_research") {
+              setDataSource(null);
+            }
+          }
           if (event.type === "agent_message" && event.message) {
             setMessages((current) => ({ ...current, [event.message!.role]: event.message }));
           }
           if (event.type === "thesis" && event.thesis) setThesis(event.thesis);
+          if (event.type === "trade_proposal" && event.proposal) setProposal(event.proposal);
           if (event.type === "error") setError(event.detail ?? "Unknown error");
         }
       }
@@ -152,6 +167,19 @@ export default function ResearchDeskPage() {
       setRunning(false);
     }
   }, [symbolInput]);
+
+  const proposalSide: "buy" | "sell" | null =
+    proposal?.action === "BUY" ? "buy" : proposal?.action === "SELL" ? "sell" : null;
+
+  const proposalReasoning = proposal
+    ? [
+        `Committee thesis: ${proposal.thesis}`,
+        proposal.instrument
+          ? `Proposed structure: ${proposal.strategy} (options); the risk gate executes the directional equity equivalent.`
+          : `Proposed structure: ${proposal.strategy}.`,
+        `Invalidation conditions: ${proposal.invalidation_conditions.join(" | ")}`,
+      ].join(" ")
+    : "";
 
   return (
     <main className="min-h-screen bg-[#080b13] px-5 py-8 text-zinc-100 sm:px-8 lg:px-12">
@@ -230,6 +258,42 @@ export default function ResearchDeskPage() {
               <div className="flex min-h-48 flex-col justify-center">
                 <AgentMascot role="investment_committee" size="lg" state={mascotStateFor("investment_committee")} showLabel />
                 <p className="mt-5 text-sm leading-6 text-zinc-400">Run the desk to let North synthesize the four specialist reports into one transparent thesis.</p>
+              </div>
+            )}
+
+            {proposal && (
+              <div className="mt-6 border-t border-white/10 pt-5">
+                <p className="text-[10px] font-semibold tracking-[.18em] text-zinc-500 uppercase">Committee proposal · risk gate</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded-full border border-white/15 bg-white/5 px-2 py-1 font-mono text-zinc-200">
+                    {proposal.symbol} · {proposal.action} · {proposal.strategy}
+                  </span>
+                  <span className="font-mono text-zinc-500">{Math.round(proposal.confidence * 100)}% confidence</span>
+                  <span className="text-zinc-600">requires risk approval</span>
+{dataSource === "synthetic" || dataSource === "mock" ? (
+                    <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300">
+                      {dataSource} data
+                    </span>
+                  ) : null}
+                </div>
+                {proposalSide ? (
+                  <div className="mt-3">
+                    <ProposeToRiskGate
+                      symbol={proposal.symbol}
+                      side={proposalSide}
+                      strategy={proposal.strategy}
+                      confidence={proposal.confidence}
+                      reasoning={proposalReasoning}
+                      agentId="ai-research-desk"
+                      defaultQuantity={10}
+                      proposal={proposal}
+                    />
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs leading-5 text-zinc-500">
+                    The committee proposed {proposal.action} — nothing is sent to the risk gate.
+                  </p>
+                )}
               </div>
             )}
           </div>

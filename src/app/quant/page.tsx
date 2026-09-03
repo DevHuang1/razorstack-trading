@@ -8,6 +8,7 @@ import type {
   PaperRecord,
 } from "@/lib/quant/paper";
 import type { MarketRegime, QuantSignal, SignalResponse, StrategyId } from "@/lib/quant/types";
+import { ProposeToRiskGate } from "@/components/ProposeToRiskGate";
 
 type StrategyPerformance = {
   strategyId: string;
@@ -40,6 +41,23 @@ const DIRECTION_BG: Record<string, string> = {
   SELL: "bg-rose-500/15 border-rose-500/40",
   HOLD: "bg-zinc-500/10 border-zinc-500/40",
 };
+
+// Explain the signal to the risk gate: score, component contributions and any
+// data-quality warnings. Backend-side risk has the final say; this is context.
+function buildQuantReasoning(signal: QuantSignal): string {
+  const parts = [
+    `Composite score ${signal.overall.score} → ${signal.overall.direction} (strength ${signal.overall.strength}%, calibrated confidence ${(signal.overall.confidence * 100).toFixed(0)}%).`,
+    ...signal.components.map((c) => `${c.name}: ${c.detail} (score ${c.score})`),
+  ];
+  if (signal.dataQuality) {
+    const dq = signal.dataQuality;
+    parts.push(
+      `Data quality: ${dq.barCount} ${dq.timeframe} bars` +
+        (dq.warnings.length > 0 ? `, warnings: ${dq.warnings.join("; ")}` : ", no warnings"),
+    );
+  }
+  return parts.join(" | ");
+}
 
 function ScoreBar({ score }: { score: number }) {
   const pct = Math.min(100, Math.abs(score) * 100);
@@ -388,7 +406,23 @@ function SignalCard({ signal }: { signal: QuantSignal }) {
         </div>
       </dl>
 
-      <div className="mt-4 flex justify-end">
+      <div className="mt-4 flex flex-wrap items-end justify-between gap-4 border-t border-zinc-800 pt-4">
+        {signal.overall.direction === "HOLD" ? (
+          <p className="text-xs text-zinc-500">
+            HOLD — nothing proposed to the risk gate.
+          </p>
+        ) : (
+          <ProposeToRiskGate
+            symbol={signal.symbol}
+            side={signal.overall.direction === "BUY" ? "buy" : "sell"}
+            strategy={signal.riskChecks.modelVersion}
+            confidence={signal.overall.confidence}
+            reasoning={buildQuantReasoning(signal)}
+            agentId="quant-engine-v1"
+            disabled={signal.dataQuality ? !signal.dataQuality.isActionable : false}
+            disabledReason="Backend data-quality says this history is not actionable — fix the data before proposing."
+          />
+        )}
         <button
           onClick={() =>
             recordSignal({

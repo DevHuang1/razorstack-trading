@@ -58,6 +58,14 @@ venv/
 # Mock broker state snapshot
 .mock_broker_state.json
 
+# Local dev server logs / scratch scripts
+backend/*.log
+backend/server.err
+backend/server.log
+
+# Quant paper tracker / runtime data
+.data/
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/

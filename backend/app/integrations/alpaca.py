@@ -71,6 +71,7 @@ class AlpacaService(BrokerService):
         token_url: str = "",
         oauth_token: str = "",
         oauth_scope: str = "",
+        request_timeout: float = 15.0,
     ):
         # --- auth: prefer OAuth2 client-credentials (new "API Keys") --------
         self._client_id = client_id
@@ -101,6 +102,9 @@ class AlpacaService(BrokerService):
             raise BrokerError("alpaca-py is not installed; run pip install alpaca-py") from exc
 
         self.paper = paper
+        # Hard cap for every SDK call: a dropped network/proxy must return a
+        # fast BrokerError instead of hanging an endpoint forever.
+        self._request_timeout = max(float(request_timeout), 0.5)
         url_override = base_url or None
         # alpaca-py rejects passing both a key pair and an oauth_token.
         use_token = bool(oauth_token)
@@ -178,13 +182,28 @@ class AlpacaService(BrokerService):
         self._data._oauth_token = token
 
     async def _call(self, fn, /, *args, **kwargs):
-        """Run a blocking SDK call after ensuring the OAuth token is fresh."""
+        """Run a blocking SDK call after ensuring the OAuth token is fresh.
+
+        Bounded by ``request_timeout``: on a dropped network/proxy the caller
+        gets a fast BrokerError (-> 502 envelope) instead of an endless hang.
+        Note the worker thread itself cannot be interrupted, but the endpoint
+        no longer blocks on it.
+        """
 
         def _run():
             self._ensure_fresh_token()
             return fn(*args, **kwargs)
 
-        return await asyncio.to_thread(_run)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run), timeout=self._request_timeout
+            )
+        except asyncio.TimeoutError as exc:
+            name = getattr(fn, "__name__", "alpaca call")
+            raise BrokerError(
+                f"alpaca {name} timed out after {self._request_timeout:.0f}s "
+                "(network/proxy to Alpaca down?)"
+            ) from exc
 
     # ----------------------------------------------------------------- account
     async def get_account(self) -> AccountInfo:

@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     alpaca_token_url: str = ""
     alpaca_oauth_token: str = ""
     alpaca_oauth_scope: str = "trading"
+    # Hard cap (seconds) for any single Alpaca SDK call so a dropped
+    # network/proxy returns a fast 502 instead of hanging forever.
+    alpaca_request_timeout: float = 15.0
 
     # --- Risk limits ---
     max_position_percent: float = 0.15

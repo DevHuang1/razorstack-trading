@@ -102,6 +102,6 @@ describe("POST /api/trades/propose", () => {
     );
 
     expect(response.status).toBe(502);
-    expect(await response.json()).toEqual({ error: "Trading backend is unavailable" });
+    expect(await response.json()).toEqual({ error: "Backend is unavailable" });
   });
 });

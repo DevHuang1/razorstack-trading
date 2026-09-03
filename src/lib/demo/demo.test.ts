@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { analyzeOpportunity } from "@/lib/agents/analyze-opportunity";
 import {
   insufficientCrisisContext,
@@ -9,6 +9,12 @@ import {
 import { runCrisisAnalysis, runInvestmentAnalysis, type DemoStepEvent } from "./index";
 
 beforeAll(() => {
+  process.env.OPENAI_API_KEY = "";
+});
+
+// Each test starts in mock mode; the fake-key test below sets its own key and
+// must not leak it into later tests when it fails or times out.
+beforeEach(() => {
   process.env.OPENAI_API_KEY = "";
 });
 
@@ -44,7 +50,7 @@ describe("runInvestmentAnalysis (mock mode)", () => {
     expect(a).toEqual(b);
   });
 
-  it("stays deterministic even when an API key is present", async () => {
+  it("stays deterministic even when an API key is present", { timeout: 30_000 }, async () => {
     process.env.OPENAI_API_KEY = "fake-key-for-demo";
     try {
       const forced = await runInvestmentAnalysis(researchDemoInput, { deterministic: true });

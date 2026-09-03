@@ -1,5 +1,8 @@
 import type { NextRequest } from "next/server";
-import type { MarketRegime, SignalResponse } from "@/lib/quant/types";
+import type { Bar, MarketRegime, QuantSignal, SignalResponse } from "@/lib/quant/types";
+import type { QuantDataQualityMetadata } from "@/lib/contracts/backend-quant";
+import { QuantDataQualityResponseSchema } from "@/lib/contracts/backend-quant";
+import { backendFetch } from "@/lib/backend/client";
 import { getBars } from "@/lib/quant/datafeed";
 import { computeQuantSignal } from "@/lib/quant/engine";
 import { detectRegime } from "@/lib/quant/regime";
@@ -9,6 +12,42 @@ export const dynamic = "force-dynamic";
 const DEFAULT_SYMBOL = "NVDA";
 const DEFAULT_TIMEFRAME = "1Day";
 const MAX_BARS = 750;
+const BACKEND_QUALITY_TIMEOUT_MS = 5_000;
+const MAX_BARS_SENT_TO_BACKEND = 250;
+
+// The FastAPI service owns data-quality configuration (min history, gap and
+// staleness thresholds), so when it is reachable its verdict overrides the
+// local computation; otherwise the local result stands.
+async function backendDataQuality(
+  symbol: string,
+  timeframe: string,
+  bars: Bar[],
+): Promise<QuantDataQualityMetadata | null> {
+  const result = await backendFetch("/quant/data-quality", {
+    method: "POST",
+    body: JSON.stringify({ symbol, timeframe, bars: bars.slice(-MAX_BARS_SENT_TO_BACKEND) }),
+    timeoutMs: BACKEND_QUALITY_TIMEOUT_MS,
+  });
+  if (!result.ok) return null;
+  const parsed = QuantDataQualityResponseSchema.safeParse(result.data);
+  return parsed.success ? parsed.data.quality : null;
+}
+
+function mergeBackendQuality(
+  signal: QuantSignal,
+  quality: QuantDataQualityMetadata | null,
+): QuantSignal {
+  if (!quality || !signal.dataQuality) return signal;
+  return {
+    ...signal,
+    dataQuality: {
+      ...signal.dataQuality,
+      isActionable: quality.is_actionable,
+      stale: quality.stale,
+      warnings: [...signal.dataQuality.warnings, ...quality.warnings.map((w) => `backend: ${w}`)],
+    },
+  };
+}
 
 function parseSymbols(raw: string | null): string[] {
   return (raw ?? DEFAULT_SYMBOL)
@@ -54,11 +93,16 @@ export async function GET(request: NextRequest) {
     }),
   );
 
+  const backendQuality = await Promise.all(
+    signals.map((signal, i) => backendDataQuality(signal.symbol, timeframe, symbolResults[i].bars)),
+  );
+  const mergedSignals = signals.map((signal, i) => mergeBackendQuality(signal, backendQuality[i]));
+
   const response: SignalResponse = {
     generatedAt,
     source: anyAlpaca ? "ALPACA" : "SYNTHETIC",
     regime,
-    signals,
+    signals: mergedSignals,
   };
   return Response.json(response);
 }
@@ -135,5 +179,7 @@ export async function POST(request: NextRequest) {
     ? detectRegime(benchmarkBars, body.benchmarkSymbol ?? "BENCHMARK")
     : detectRegime([]);
 
-  return Response.json({ signal, regime });
+  const quality = await backendDataQuality(body.symbol.toUpperCase(), signal.timeframe, bars);
+
+  return Response.json({ signal: mergeBackendQuality(signal, quality), regime });
 }
