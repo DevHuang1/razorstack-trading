@@ -5,7 +5,6 @@ export const dynamic = "force-dynamic";
 
 const DATA_BASE = "https://data.alpaca.markets";
 const PAPER_TRADING_BASE = "https://paper-api.alpaca.markets";
-const LIVE_TRADING_BASE = "https://api.alpaca.markets";
 const REQUEST_TIMEOUT_MS = 10000;
 
 const ENDPOINTS = {
