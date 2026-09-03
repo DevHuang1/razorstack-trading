@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 
 const BG  = "#0e1117";
 const PNL = "#161b27";
@@ -84,10 +84,34 @@ function TimeLabels() {
 }
 
 type Screen = "trade" | "asset";
+type LivePrice = { price: number; changePct: number; change: number };
 
 export default function Dashboard() {
   const [screen, setScreen] = useState<Screen>("trade");
   const [activeCoin, setActiveCoin] = useState(COINS[0]);
+  const [livePrices, setLivePrices] = useState<Record<string, LivePrice>>({});
+
+  useEffect(() => {
+    // Fetch live prices from Alpaca (skip stablecoins)
+    const syms = COINS.filter(c => !["USDT", "USDC"].includes(c.sym)).map(c => c.sym).join(",");
+    const fetchPrices = async () => {
+      try {
+        const res = await fetch(`/api/market/prices?symbols=${syms}`);
+        if (!res.ok) return;
+        const data = await res.json() as Record<string, { price: number; changePct: number; change: number }>;
+        const next: Record<string, LivePrice> = {};
+        for (const [sym, snap] of Object.entries(data)) {
+          if (snap && typeof snap.price === "number") {
+            next[sym] = { price: snap.price, changePct: snap.changePct ?? 0, change: snap.change ?? 0 };
+          }
+        }
+        if (Object.keys(next).length > 0) setLivePrices(next);
+      } catch {}
+    };
+    fetchPrices();
+    const id = setInterval(fetchPrices, 5000);
+    return () => clearInterval(id);
+  }, []);
   const [tf, setTf] = useState("1D");
   const [tradeTab, setTradeTab] = useState<"buy"|"sell"|"convert">("convert");
   const [starred, setStarred] = useState<Set<string>>(new Set(["BTC"]));
@@ -240,7 +264,12 @@ export default function Dashboard() {
                   </div>
 
                   {/* Rows */}
-                  {filtered.map(c => (
+                  {filtered.map(c => {
+                    const lp = livePrices[c.sym];
+                    const displayPrice = lp ? lp.price : c.price;
+                    const displayChg = lp ? lp.changePct : c.chg;
+                    const isLive = !!lp;
+                    return (
                     <div key={c.sym} className="row" onClick={() => openAsset(c)} style={{
                       display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr 80px 48px",
                       padding:"10px 16px", gap:8, alignItems:"center",
@@ -252,14 +281,14 @@ export default function Dashboard() {
                         <div style={{ width:32, height:32, borderRadius:"50%", background:c.color, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:800, color:"#fff", flexShrink:0 }}>{c.icon}</div>
                         <div>
                           <div style={{ fontSize:14, fontWeight:600 }}>{c.name}</div>
-                          <div style={{ fontSize:11, color:DIM }}>{c.sym}{c.apy ? ` · ${c.apy}% APY` : ""}</div>
+                          <div style={{ fontSize:11, color:DIM }}>{c.sym}{c.apy ? ` · ${c.apy}% APY` : ""}{isLive && <span style={{ marginLeft:4, color:G, fontSize:9 }}>●LIVE</span>}</div>
                         </div>
                       </div>
-                      <div style={{ fontSize:14, fontFamily:"monospace", textAlign:"right" }}>${c.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                      <div style={{ fontSize:13, fontWeight:600, color:c.chg>=0?G:R, textAlign:"right" }}>{c.chg>=0?"+":""}{c.chg.toFixed(2)}%</div>
+                      <div style={{ fontSize:14, fontFamily:"monospace", textAlign:"right" }}>${displayPrice.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                      <div style={{ fontSize:13, fontWeight:600, color:displayChg>=0?G:R, textAlign:"right" }}>{displayChg>=0?"+":""}{displayChg.toFixed(2)}%</div>
                       <div style={{ fontSize:13, textAlign:"right" }}>{c.mcap}</div>
                       <div style={{ display:"flex", justifyContent:"flex-end" }}>
-                        <Sparkline sym={c.sym} chg={c.chg}/>
+                        <Sparkline sym={c.sym} chg={displayChg}/>
                       </div>
                       <div style={{ display:"flex", justifyContent:"center" }}>
                         <span onClick={e => { e.stopPropagation(); setStarred(p => { const n=new Set(p); n.has(c.sym)?n.delete(c.sym):n.add(c.sym); return n; }); }}
@@ -268,7 +297,8 @@ export default function Dashboard() {
                         </span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
               ) : (
@@ -304,9 +334,9 @@ export default function Dashboard() {
                   <div style={{ background:PNL, borderRadius:10, padding:20, border:`1px solid ${BRD}` }}>
                     <div style={{ marginBottom:12 }}>
                       <div style={{ fontSize:11, color:DIM }}>{activeCoin.sym} Price</div>
-                      <div style={{ fontSize:30, fontWeight:700, fontFamily:"monospace" }}>${activeCoin.price.toLocaleString()}</div>
-                      <div style={{ fontSize:13, color:activeCoin.chg>=0?G:R, marginTop:2 }}>
-                        {activeCoin.chg>=0?"↗":"↘"} $0.00 ({activeCoin.chg>=0?"+":""}{activeCoin.chg.toFixed(2)}%)
+                      <div style={{ fontSize:30, fontWeight:700, fontFamily:"monospace" }}>${(livePrices[activeCoin.sym]?.price ?? activeCoin.price).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                      <div style={{ fontSize:13, color:(livePrices[activeCoin.sym]?.changePct ?? activeCoin.chg)>=0?G:R, marginTop:2 }}>
+                        {(livePrices[activeCoin.sym]?.changePct ?? activeCoin.chg)>=0?"↗":"↘"} ${Math.abs(livePrices[activeCoin.sym]?.change ?? 0).toFixed(2)} ({(livePrices[activeCoin.sym]?.changePct ?? activeCoin.chg)>=0?"+":""}{(livePrices[activeCoin.sym]?.changePct ?? activeCoin.chg).toFixed(2)}%)
                       </div>
                     </div>
                     {/* TF buttons */}
