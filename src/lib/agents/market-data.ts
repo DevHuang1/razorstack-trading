@@ -12,7 +12,7 @@ import {
   realizedVolSeries,
   lastValue,
 } from "@/lib/quant/indicators";
-import type { MarketSnapshot, NewsItem } from "@/lib/contracts/research";
+import type { NewsItem } from "@/lib/contracts/research";
 
 const SECTOR_MAP: Record<string, string> = {
   AAPL: "Technology", MSFT: "Technology", NVDA: "Technology", GOOGL: "Technology",
@@ -24,9 +24,9 @@ const SECTOR_MAP: Record<string, string> = {
   CVX: "Energy", COP: "Energy", SPY: "Index", QQQ: "Index", IWM: "Index",
   DIA: "Index", BTC: "Crypto", ETH: "Crypto", SOL: "Crypto",
 };
-function getSector(s) { return SECTOR_MAP[s.toUpperCase()] ?? "Technology"; }
-function r2(n) { return Math.round(n * 100) / 100; }
-function deriveRegime(rsi14, sma20, sma50, price, vol30) {
+function getSector(s: string): string { return SECTOR_MAP[s.toUpperCase()] ?? "Technology"; }
+function r2(n: number): number { return Math.round(n * 100) / 100; }
+function deriveRegime(rsi14: number, sma20: number | null, sma50: number | null, price: number, vol30: number | null): "risk_on" | "neutral" | "risk_off" {
   let score = 0;
   if (rsi14 > 55) score++; if (rsi14 < 45) score--;
   if (sma20 !== null && price > sma20) score++;
@@ -37,7 +37,7 @@ function deriveRegime(rsi14, sma20, sma50, price, vol30) {
   if (score <= -1) return "risk_off";
   return "neutral";
 }
-export async function fetchMarketData(symbol) {
+export async function fetchMarketData(symbol: string) {
   const { bars } = await getBars(symbol, "1Day", 750);
   const closes = bars.map(b => b.c);
   const volumes = bars.map(b => b.v);
@@ -46,7 +46,7 @@ export async function fetchMarketData(symbol) {
   const sma20 = lastValue(sma(closes, 20));
   const sma50 = lastValue(sma(closes, 50));
   const vol30 = lastValue(realizedVolSeries(closes, 30));
-  const pct = idx => closes.length > idx ? r2((price - closes[closes.length - 1 - idx]) / closes[closes.length - 1 - idx] * 100) : 0;
+  const pct = (idx: number) => closes.length > idx ? r2((price - closes[closes.length - 1 - idx]) / closes[closes.length - 1 - idx] * 100) : 0;
   const slice30 = volumes.slice(-30);
   const snapshot = {
     symbol: symbol.toUpperCase(), price: r2(price), change1dPct: pct(1), change5dPct: pct(5), change1mPct: pct(21),
@@ -59,15 +59,15 @@ export async function fetchMarketData(symbol) {
   const news = await fetchNews(symbol);
   return { snapshot, news };
 }
-export async function fetchNews(symbol) {
+export async function fetchNews(symbol: string): Promise<NewsItem[]> {
   const keyId = process.env.ALPACA_API_KEY_ID;
   const secretKey = process.env.ALPACA_API_SECRET_KEY;
   if (!keyId || !secretKey) return [{ id: `synthetic-${symbol}-1`, headline: `${symbol} under review`, summary: "Market monitoring active", source: "Synthetic", publishedAt: new Date().toISOString(), sentiment: null }];
   try {
-    const params = new URLSearchParams({ symbols:symbol, limit: "10", sort: "desc" });
+    const params = new URLSearchParams({ symbols: symbol, limit: "10", sort: "desc" });
     const res = await fetch(`https://data.alpaca.markets/v1beta1/news?${params}`, { headers: { "APCA-AIP-KEY-ID": keyId, "APCA-API-SECRET-KEY": secretKey }, signal: AbortSignal.timeout(5000) });
     if (!res.ok) return [];
-    const json = await res.json();
-    return (json.news ?? []).map(n => ({ id: String(n.id), headline: n.headline, summary: n.summary || n.headline, source: n.source, publishedAt: n.created_at, sentiment: null }));
+    const json = (await res.json()) as { news?: Array<{ id: unknown; headline: string; summary?: string; source: string; created_at: string }> };
+    return (json.news ?? []).map((n) => ({ id: String(n.id), headline: n.headline, summary: n.summary || n.headline, source: n.source, publishedAt: n.created_at, sentiment: null }));
   } catch { return []; }
 }

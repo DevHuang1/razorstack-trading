@@ -32,6 +32,14 @@ interface StreamEvent {
   thesis?: AIThesis;
 }
 
+interface RiskDecision {
+  status: string;
+  reason?: string;
+  order?: { order_id?: string; status?: string };
+  message?: string;
+  error?: string;
+}
+
 const NORMAL_AGENT_ORDER: AgentRole[] = [
   "news",
   "market_research",
@@ -53,6 +61,19 @@ const STANCE_STYLES: Record<AgentMessage["stance"], string> = {
   bearish: "border-rose-400/30 bg-rose-400/10 text-rose-300",
   neutral: "border-zinc-700 bg-zinc-900 text-zinc-400",
 };
+
+function normalizeDirection(direction: string | undefined): "bullish" | "bearish" | "neutral" {
+  switch (direction?.toUpperCase()) {
+    case "BULLISH":
+    case "BUY":
+      return "bullish";
+    case "BEARISH":
+    case "SELL":
+      return "bearish";
+    default:
+      return "neutral";
+  }
+}
 
 function AgentCard({
   message,
@@ -120,10 +141,15 @@ export default function ResearchDeskPage() {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [crisisMode, setCrisisMode] = useState(false);
+  const [quantityInput, setQuantityInput] = useState("10");
+  const [riskDecision, setRiskDecision] = useState<RiskDecision | null>(null);
+  const [proposing, setProposing] = useState(false);
   const { states: backendStates, updates: backendUpdates, connected: backendConnected } =
     useAgentStatusStream();
 
   const agentOrder = crisisMode ? CRISIS_AGENT_ORDER : NORMAL_AGENT_ORDER;
+
+  const actionable = !crisisMode && normalizeDirection(thesis?.direction) !== "neutral";
 
   const activeRole = useMemo(() => {
     if (!running) return null;
@@ -155,6 +181,7 @@ export default function ResearchDeskPage() {
       setSymbol(nextSymbol);
       setMessages({});
       setThesis(null);
+      setRiskDecision(null);
       setError(null);
       setRunning(true);
       setStatus("Opening the research loop…");
@@ -204,6 +231,42 @@ export default function ResearchDeskPage() {
     },
     [symbolInput, crisisMode],
   );
+
+  const proposeToRiskEngine = useCallback(async () => {
+    if (!thesis || !actionable) return;
+    const qty = Number(quantityInput);
+    if (!Number.isInteger(qty) || qty <= 0) {
+      setRiskDecision({ status: "error", error: "Enter a positive whole-number quantity." });
+      return;
+    }
+    setProposing(true);
+    setRiskDecision(null);
+    try {
+      const response = await fetch("/api/trades/propose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: "research-desk",
+          symbol: thesis.symbol,
+          side: normalizeDirection(thesis.direction) === "bullish" ? "buy" : "sell",
+          quantity: qty,
+          order_type: "market",
+          strategy: "research-desk",
+          confidence: thesis.confidence / 100,
+          reasoning: (thesis.summary + " " + thesis.recommendation).slice(0, 4000),
+        }),
+      });
+      const body = (await response.json()) as RiskDecision;
+      setRiskDecision({
+        ...body,
+        status: body.error ? "error" : response.ok ? "approved" : "rejected",
+      });
+    } catch {
+      setRiskDecision({ status: "error", error: "Risk engine is unavailable." });
+    } finally {
+      setProposing(false);
+    }
+  }, [thesis, actionable, quantityInput]);
 
   return (
     <main className="min-h-screen bg-[#080b13] px-5 py-8 text-zinc-100 sm:px-8 lg:px-12">
@@ -257,6 +320,7 @@ export default function ResearchDeskPage() {
                   setCrisisMode(e.target.checked);
                   setMessages({});
                   setThesis(null);
+                  setRiskDecision(null);
                 }}
               />
               Crisis mode — activate Sentinel, Radar, Gauge, Hedge, Apex
@@ -362,6 +426,62 @@ export default function ResearchDeskPage() {
                     </p>
                   </div>
                 </div>
+
+                {!crisisMode &&
+                  (actionable ? (
+                    <div className="mt-5 rounded-2xl border border-violet-400/30 bg-black/20 p-4">
+                      <p className="text-[10px] font-semibold tracking-[.18em] text-violet-300/80 uppercase">
+                        Hand off to risk engine
+                      </p>
+                      <p className="mt-2 text-xs leading-5 text-zinc-400">
+                        The desk recommends <span className="font-semibold text-zinc-200">
+                          {normalizeDirection(thesis.direction) === "bullish" ? "BUY" : "SELL"}
+                        </span>{" "}
+                        at {thesis.confidence}% confidence. Route the thesis through the deterministic FastAPI risk
+                        gate before execution.
+                      </p>
+                      <div className="mt-3 flex gap-2">
+                        <input
+                          value={quantityInput}
+                          onChange={(event) => setQuantityInput(event.target.value)}
+                          aria-label="Position quantity"
+                          className="w-24 rounded-lg border border-white/10 bg-white/[.04] px-3 py-2 font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-violet-400/70"
+                          placeholder="Qty"
+                        />
+                        <button
+                          type="button"
+                          disabled={proposing}
+                          onClick={proposeToRiskEngine}
+                          className="flex-1 rounded-lg bg-violet-400 px-3 py-2 text-sm font-semibold text-[#100b1b] transition hover:bg-violet-300 disabled:opacity-50"
+                        >
+                          {proposing ? "Checking risk…" : "Propose to risk engine"}
+                        </button>
+                      </div>
+                      {riskDecision && (
+                        <div
+                          className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                            riskDecision.status === "approved"
+                              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                              : riskDecision.status === "error"
+                                ? "border-rose-400/30 bg-rose-400/10 text-rose-300"
+                                : "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                          }`}
+                        >
+                          {riskDecision.error
+                            ? riskDecision.error
+                            : `${riskDecision.status.toUpperCase()}${
+                                riskDecision.reason ? ` — ${riskDecision.reason}` : ""
+                              }${
+                                riskDecision.order?.status ? ` · ${riskDecision.order.status}` : ""
+                              }`}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-5 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs text-zinc-500">
+                      Recommendation is {thesis.direction}; nothing to route to the execution risk engine.
+                    </p>
+                  ))}
               </>
             ) : (
               <div className="flex min-h-48 flex-col justify-center">

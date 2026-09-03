@@ -112,7 +112,7 @@ function generateSyntheticBars(symbol: string, limit: number): Bar[] {
   // Start `limit` trading days ago (skip weekends)
   const today = new Date();
   const dates: string[] = [];
-  let d = new Date(today);
+  const d = new Date(today);
   d.setDate(d.getDate() - 1); // don't include today
   while (dates.length < limit) {
     const dow = d.getDay();

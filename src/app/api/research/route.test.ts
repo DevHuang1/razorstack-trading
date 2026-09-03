@@ -1,20 +1,43 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { TradeProposalWireSchema } from "@/lib/contracts/research";
-import { marketDataProvider } from "@/lib/data/market-data";
+import type { NextRequest } from "next/server";
+import type { MarketSnapshot } from "@/lib/contracts/research";
+import type { AgentMessage, AgentRoleName, CIOSynthesis } from "@/lib/agents/agents";
 
-vi.mock("@/lib/data/market-data", () => ({
-  marketDataProvider: {
-    getMarketSnapshot: vi.fn(),
-    getRecentNews: vi.fn(),
-  },
+vi.mock("@/lib/agents/market-data", () => ({
+  fetchMarketData: vi.fn(),
 }));
 
-import { GET, POST } from "./route";
+vi.mock("@/lib/agents/agents", () => ({
+  runNewsAgent: vi.fn(),
+  runMarketResearchAgent: vi.fn(),
+  runBullAgent: vi.fn(),
+  runBearAgent: vi.fn(),
+  runCIOAgent: vi.fn(),
+  runCrisisNewsAgent: vi.fn(),
+  runCrisisMarketAgent: vi.fn(),
+  runCrisisRiskAgent: vi.fn(),
+  runCrisisOptionsAgent: vi.fn(),
+  runCrisisCommitteeAgent: vi.fn(),
+}));
 
-const mockedSnapshot = vi.mocked(marketDataProvider.getMarketSnapshot);
-const mockedNews = vi.mocked(marketDataProvider.getRecentNews);
+import { fetchMarketData } from "@/lib/agents/market-data";
+import {
+  runNewsAgent,
+  runMarketResearchAgent,
+  runBullAgent,
+  runBearAgent,
+  runCIOAgent,
+  runCrisisNewsAgent,
+  runCrisisMarketAgent,
+  runCrisisRiskAgent,
+  runCrisisOptionsAgent,
+  runCrisisCommitteeAgent,
+} from "@/lib/agents/agents";
+import { POST } from "./route";
 
-const snapshot = {
+const mockedFetchMarketData = vi.mocked(fetchMarketData);
+
+const snapshot: MarketSnapshot = {
   symbol: "NVDA",
   price: 334.13,
   change1dPct: -0.01,
@@ -25,7 +48,9 @@ const snapshot = {
   sma50: 336.58,
   realizedVol30dAnnPct: 18.6,
   sector: "Technology",
-  regime: "risk_on" as const,
+  regime: "risk_on",
+  latestVolume: 1_000_000,
+  averageVolume30d: 900_000,
 };
 
 const news = [
@@ -39,13 +64,50 @@ const news = [
   },
 ];
 
+function message(role: AgentRoleName): AgentMessage {
+  return {
+    role,
+    stance: "bullish",
+    headline: `${role} headline`,
+    body: `${role} body`,
+    confidence: 70,
+  };
+}
+
+const CIO: { message: AgentMessage; thesis: CIOSynthesis } = {
+  message: message("investment_committee"),
+  thesis: {
+    symbol: "NVDA",
+    direction: "BUY",
+    confidence: 70,
+    summary: "CIO summary",
+    catalysts: ["data center demand"],
+    risks: ["valuation"],
+    recommendation: "Buy NVDA",
+  },
+};
+
 beforeAll(() => {
   process.env.OPENAI_API_KEY = "";
 });
 
 beforeEach(() => {
-  mockedSnapshot.mockReset().mockResolvedValue(snapshot);
-  mockedNews.mockReset().mockResolvedValue(news);
+  mockedFetchMarketData
+    .mockReset()
+    .mockResolvedValue({ snapshot, news } as Awaited<ReturnType<typeof fetchMarketData>>);
+  vi.mocked(runNewsAgent).mockReset().mockResolvedValue(message("news"));
+  vi.mocked(runMarketResearchAgent).mockReset().mockResolvedValue(message("market_research"));
+  vi.mocked(runBullAgent).mockReset().mockResolvedValue(message("bull"));
+  vi.mocked(runBearAgent).mockReset().mockResolvedValue(message("bear"));
+  vi.mocked(runCIOAgent).mockReset().mockResolvedValue(CIO);
+  vi.mocked(runCrisisNewsAgent).mockReset().mockResolvedValue(message("crisis_news"));
+  vi.mocked(runCrisisMarketAgent).mockReset().mockResolvedValue(message("crisis_market"));
+  vi.mocked(runCrisisRiskAgent).mockReset().mockResolvedValue(message("crisis_risk_analyst"));
+  vi.mocked(runCrisisOptionsAgent).mockReset().mockResolvedValue(message("crisis_options"));
+  vi.mocked(runCrisisCommitteeAgent).mockReset().mockResolvedValue({
+    message: message("crisis_committee"),
+    thesis: { ...CIO.thesis, symbol: "NVDA" },
+  });
 });
 
 async function readEvents(res: Response): Promise<Record<string, unknown>[]> {
@@ -57,72 +119,36 @@ async function readEvents(res: Response): Promise<Record<string, unknown>[]> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-describe("GET /api/research", () => {
-  it("streams the full v2 event DAG ending in a wire-format proposal", async () => {
-    const res = await GET(new Request("http://localhost/api/research?symbol=nvda"));
-    const events = await readEvents(res);
-
-    expect(events[0]).toMatchObject({ type: "status", step: "market_research" });
-    expect(events.at(-1)).toEqual({ type: "done" });
-    expect(events.some((e) => e.type === "error")).toBe(false);
-
-    const proposalEvent = events.find((e) => e.type === "trade_proposal") as {
-      proposal: unknown;
-    };
-    const wire = TradeProposalWireSchema.parse(proposalEvent.proposal);
-    expect(wire.symbol).toBe("NVDA");
-    expect(wire.requires_risk_approval).toBe(true);
-    expect(wire.confidence).toBeLessThanOrEqual(1);
-  });
-
-  it("rejects malformed symbols with 400", async () => {
-    const res = await GET(new Request("http://localhost/api/research?symbol=TOOLONGTICKER"));
-    expect(res.status).toBe(400);
-  });
-
-  it("returns 404 when the provider has no data", async () => {
-    mockedSnapshot.mockRejectedValue(new Error("no data"));
-    const res = await GET(new Request("http://localhost/api/research?symbol=NVDA"));
-    expect(res.status).toBe(404);
-  });
-});
+function post(body: unknown): Promise<Response> {
+  return POST(
+    new Request("http://localhost/api/research", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    }) as unknown as NextRequest,
+  );
+}
 
 describe("POST /api/research", () => {
-  it("accepts a symbol-only body", async () => {
-    const res = await POST(
-      new Request("http://localhost/api/research", {
-        method: "POST",
-        body: JSON.stringify({ symbol: "NVDA" }),
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    const events = await readEvents(res);
-    expect(events.some((e) => e.type === "trade_proposal")).toBe(true);
+  it("streams agent messages and a thesis for a bull desk run", async () => {
+    const events = await readEvents(await post({ symbol: "NVDA" }));
+
+    expect(events[0]).toMatchObject({ type: "status", step: "Fetching market data" });
+    expect(events.some((e) => e.type === "agent_message")).toBe(true);
+    expect(events.find((e) => e.type === "thesis")).toMatchObject({ thesis: { symbol: "NVDA" } });
+    expect(events.at(-1)).toEqual({ type: "done" });
   });
 
-  it("accepts a full input document without touching the provider", async () => {
-    const res = await POST(
-      new Request("http://localhost/api/research", {
-        method: "POST",
-        body: JSON.stringify({ symbol: "AAPL", marketData: { ...snapshot, symbol: "AAPL" }, news }),
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    const events = await readEvents(res);
-    const proposal = (events.find((e) => e.type === "trade_proposal") as { proposal: { symbol: string } })
-      .proposal;
-    expect(proposal.symbol).toBe("AAPL");
-    expect(mockedSnapshot).not.toHaveBeenCalled();
+  it("runs the crisis committee when crisis is enabled", async () => {
+    const events = await readEvents(await post({ symbol: "NVDA", crisis: true }));
+
+    expect(vi.mocked(runCrisisNewsAgent)).toHaveBeenCalled();
+    expect(vi.mocked(runCrisisCommitteeAgent)).toHaveBeenCalled();
+    expect(events.find((e) => e.type === "thesis")).toBeDefined();
   });
 
-  it("rejects an invalid input document with 400", async () => {
-    const res = await POST(
-      new Request("http://localhost/api/research", {
-        method: "POST",
-        body: JSON.stringify({ marketData: "junk" }),
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it("rejects an invalid symbol with 400", async () => {
+    const res = await post({ symbol: " " });
     expect(res.status).toBe(400);
   });
 });

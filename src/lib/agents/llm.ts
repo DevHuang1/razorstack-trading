@@ -5,8 +5,34 @@
  * Override the model with ANTHROPIC_MODEL (default: claude-3-5-sonnet-20241022).
  */
 
+import { createOpenAI } from "@ai-sdk/openai";
+
 export const MODEL =
   process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-20241022";
+
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+
+/**
+ * True when an LLM key is configured for the structured-agent path.
+ */
+export function hasLLM(): boolean {
+  return Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim());
+}
+
+let cachedProvider: ReturnType<typeof createOpenAI> | null = null;
+
+/**
+ * Vercel AI SDK model for the StructuredAgent path (OpenAI).
+ */
+export function getModel(): ReturnType<ReturnType<typeof createOpenAI>> {
+  if (!cachedProvider) {
+    cachedProvider = createOpenAI({
+      apiKey: process.env.OPENAI_API_KEY ?? "",
+      baseURL: process.env.OPENAI_BASE_URL,
+    });
+  }
+  return cachedProvider(OPENAI_MODEL);
+}
 
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 const API_VERSION = "2023-06-01";
