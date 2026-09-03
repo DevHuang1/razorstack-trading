@@ -13,22 +13,31 @@ describe("AgentMascot", () => {
 
       expect(screen.getByText(profile.name)).toBeInTheDocument();
       expect(screen.getByText(profile.title)).toBeInTheDocument();
-      expect(screen.getByLabelText(`${profile.name}, ${profile.title}`)).toBeInTheDocument();
+      // Idle state maps to "standby" in the accessible label
+      expect(
+        screen.getByLabelText(`${profile.name}, ${profile.title}, standby`),
+      ).toBeInTheDocument();
     },
   );
 
-  it("exposes the requested animation state without changing the stable identity label", () => {
+  it("exposes the requested animation state in the accessible label and title", () => {
     render(<AgentMascot role="market_research" state="thinking" />);
 
-    const mascot = screen.getByLabelText("Vector, Market Structure");
-    expect(mascot).toHaveAttribute("data-mascot-state", "thinking");
-    expect(mascot).toHaveAttribute("title", "Vector · Market Structure · thinking");
+    const mascot = screen.getByLabelText("Vector, Market Structure, thinking");
+    expect(mascot).toHaveAttribute(
+      "title",
+      "Vector · Market Structure · thinking",
+    );
   });
 
   it("renders a compact mascot without requiring a label", () => {
     render(<AgentMascot role="investment_committee" size="sm" />);
 
-    expect(screen.queryByText(AGENT_PROFILES.investment_committee.name)).not.toBeInTheDocument();
-    expect(screen.getByLabelText("North, Chief Investment Officer")).toBeInTheDocument();
+    expect(
+      screen.queryByText(AGENT_PROFILES.investment_committee.name),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText("North, Chief Investment Officer, standby"),
+    ).toBeInTheDocument();
   });
 });
