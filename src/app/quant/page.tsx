@@ -1,285 +1,345 @@
 "use client";
-
 import React, { useState, useCallback, useRef, useMemo } from "react";
 
-// ─── Design tokens (Coinbase Advanced dark navy) ──────────────────────────────
-const G = "#00c07f";   // green
-const R = "#f6465d";   // red
-const B = "#3b82f6";   // blue accent
-const NAVY = "#080e1a";
-const PANEL = "#0d1526";
-const BORDER = "#1a2540";
-const TEXT = "#e6e9ef";
-const MUTED = "#5e6673";
-const AMBER = "#f59e0b";
+// ─── Exact Coinbase Advanced colors ──────────────────────────────────────────
+const BG   = "#0e1117";   // page bg
+const PNL  = "#161b27";   // panel
+const PN2  = "#1a2235";   // lighter panel
+const PN3  = "#0a0e17";   // darkest bg (chart)
+const BRD  = "#252e3f";   // borders
+const TXT  = "#d1d4dc";   // primary text
+const DIM  = "#787b86";   // muted
+const G    = "#26a69a";   // green (buy / bid)
+const R    = "#ef5350";   // red  (sell / ask)
+const BLU  = "#2962ff";   // coinbase blue
+const ORG  = "#f7931a";   // BTC orange / current price
+const AMB  = "#f59e0b";   // amber
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type AgentRole = "news" | "market_research" | "bull" | "bear" | "investment_committee"
-  | "crisis_news" | "crisis_market" | "crisis_risk_analyst" | "crisis_options" | "crisis_committee";
-type Stance = "bullish" | "bearish" | "neutral";
-type Direction = "BUY" | "SELL" | "HOLD";
-interface AgentMessage { role: AgentRole; stance: Stance; headline: string; body: string; confidence: number | null; }
-interface CIOThesis { symbol: string; direction: Direction; confidence: number; summary: string; catalysts: string[]; risks: string[]; recommendation: string; }
-interface StreamEvent { type: "status" | "agent_message" | "thesis" | "error" | "done"; step?: string; detail?: string; message?: AgentMessage; thesis?: CIOThesis; }
-interface Candle { open: number; high: number; low: number; close: number; volume: number; }
+// ─── Types ───────────────────────────────────────────────────────────────────
+type Side = "buy" | "sell";
+type OType = "LIMIT" | "MARKET" | "STOP LIMIT";
+type Tf = "1m" | "5m" | "15m" | "1H" | "4H" | "1D" | "1W";
+type ChartTab = "price" | "depth";
+type BookTab = "order_book" | "trade_history";
+type Modal = "none" | "chart_settings" | "go_to";
+type SettSect = "symbol" | "status_line" | "scales" | "canvas";
+interface Candle { o: number; h: number; l: number; c: number; v: number; }
+interface Level { price: number; amount: number; cum: number; }
 
-// ─── Agent definitions ────────────────────────────────────────────────────────
-const NORMAL_AGENTS = [
-  { role: "news" as AgentRole,                 name: "Sage",     title: "News Intelligence",  accent: "#6366f1", emoji: "◎" },
-  { role: "market_research" as AgentRole,      name: "Vector",   title: "Market Structure",   accent: "#0ea5e9", emoji: "△" },
-  { role: "bull" as AgentRole,                 name: "Atlas",    title: "Bull Case",          accent: G,         emoji: "↑" },
-  { role: "bear" as AgentRole,                 name: "Mara",     title: "Risk Challenge",     accent: R,         emoji: "↓" },
-  { role: "investment_committee" as AgentRole, name: "North",    title: "CIO Synthesis",      accent: AMBER,     emoji: "✦" },
-];
-const CRISIS_AGENTS = [
-  { role: "crisis_news" as AgentRole,          name: "Sentinel", title: "Crisis News",        accent: R,         emoji: "!" },
-  { role: "crisis_market" as AgentRole,        name: "Radar",    title: "Crisis Market",      accent: "#f97316", emoji: "⬡" },
-  { role: "crisis_risk_analyst" as AgentRole,  name: "Gauge",    title: "Crisis Risk",        accent: "#a855f7", emoji: "⚑" },
-  { role: "crisis_options" as AgentRole,       name: "Hedge",    title: "Options Playbook",   accent: "#06b6d4", emoji: "⊕" },
-  { role: "crisis_committee" as AgentRole,     name: "Apex",     title: "Crisis Committee",   accent: "#dc2626", emoji: "★" },
-];
-
-const TIMEFRAMES = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
-const CHART_TYPES = ["Candles", "Area", "Columns"];
-const WATCHLIST = ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "SPY", "BTC", "ETH"];
-
-// ─── Synthetic OHLCV data ─────────────────────────────────────────────────────
-function seededRng(seed: number) {
+// ─── Seeded RNG ──────────────────────────────────────────────────────────────
+function mkRng(seed: number) {
   let s = seed >>> 0;
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-function generateCandles(symbol: string, tf: string, count = 55): Candle[] {
-  let seed = symbol.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
-  seed += TIMEFRAMES.indexOf(tf) * 199 + 7;
-  const rng = seededRng(seed);
-  let price = 60 + (seed % 380);
-  return Array.from({ length: count }, () => {
-    const vol = 0.012 + rng() * 0.022;
-    const open = price;
-    const close = open * (1 + (rng() - 0.475) * vol * 2);
-    const high = Math.max(open, close) * (1 + rng() * vol * 0.55);
-    const low = Math.min(open, close) * (1 - rng() * vol * 0.55);
-    price = close;
-    return { open, high, low, close, volume: rng() * 700 + 90 };
+// ─── Generate candles ────────────────────────────────────────────────────────
+const BASES: Record<string, number> = {
+  BTC:70000, ETH:2650, NVDA:135, AAPL:195, MSFT:425, TSLA:250, SPY:555, SOL:175, BNB:590, XRP:0.52,
+};
+function genCandles(sym: string, tf: Tf, n = 120): Candle[] {
+  const tfs = ["1m","5m","15m","1H","4H","1D","1W"];
+  const seed = sym.split("").reduce((a,c) => a + c.charCodeAt(0), 0) + tfs.indexOf(tf) * 211 + 7;
+  const r = mkRng(seed);
+  let p = BASES[sym] ?? (60 + (seed % 380));
+  return Array.from({ length: n }, () => {
+    const vol = 0.007 + r() * 0.016;
+    const o = p, c = o * (1 + (r() - 0.487) * vol * 2);
+    const swing = r() * vol * 0.55;
+    const h = Math.max(o, c) * (1 + swing), l = Math.min(o, c) * (1 - swing);
+    p = c;
+    return { o, h, l, c, v: r() * 900 + 40 };
   });
 }
 
-// ─── SVG Chart ────────────────────────────────────────────────────────────────
-function Chart({ symbol, tf, chartType }: { symbol: string; tf: string; chartType: string }) {
-  const candles = useMemo(() => generateCandles(symbol, tf), [symbol, tf]);
-  const W = 760, H = 320, VOL_H = 52, PRPAD = 58, TOP = 6;
-  const chartH = H - VOL_H - 8;
-  const chartW = W - PRPAD;
-  const prices = candles.flatMap(c => [c.high, c.low]);
-  const pMin = Math.min(...prices) * 0.9985;
-  const pMax = Math.max(...prices) * 1.0015;
-  const pRange = pMax - pMin || 1;
-  const maxVol = Math.max(...candles.map(c => c.volume));
-  const cW = Math.max(7, Math.floor(chartW / candles.length) - 2);
-  const gap = Math.floor(chartW / candles.length) - cW;
-  const pY = (p: number) => TOP + chartH - ((p - pMin) / pRange) * chartH;
+// ─── Generate order book ─────────────────────────────────────────────────────
+function genBook(price: number, side: "asks"|"bids", n = 18): Level[] {
+  const r = mkRng(Math.floor(price * 137));
+  const step = price * 0.00008;
+  let cum = 0;
+  return Array.from({ length: n }, (_, i) => {
+    const amount = r() * 0.6 + 0.001;
+    cum += amount;
+    const px = side === "asks" ? price * 1.0001 + step * i : price * 0.9999 - step * i;
+    return { price: px, amount, cum };
+  });
+}
+
+// ─── SVG Candle Chart ────────────────────────────────────────────────────────
+function CandleChart({ sym, tf }: { sym: string; tf: Tf }) {
+  const candles = useMemo(() => genCandles(sym, tf, 120), [sym, tf]);
+  const W = 760, H = 300, VOL = 48, PAD = 64, TOP = 6;
+  const cH = H - VOL - 10;
+  const prices = candles.flatMap(c => [c.h, c.l]);
+  const pMin = Math.min(...prices) * 0.9982, pMax = Math.max(...prices) * 1.0018;
+  const pRng = pMax - pMin || 1;
+  const maxV = Math.max(...candles.map(c => c.v));
+  const cW = Math.max(4, Math.floor((W - PAD) / candles.length) - 1);
+  const gap = Math.max(1, Math.floor((W - PAD) / candles.length) - cW);
+  const pY = (p: number) => TOP + cH - ((p - pMin) / pRng) * cH;
   const xC = (i: number) => i * (cW + gap) + cW / 2;
   const last = candles[candles.length - 1];
-  const lastClose = last?.close ?? 0;
-  const pctChange = candles.length > 1
-    ? ((lastClose - candles[0].open) / candles[0].open * 100)
-    : 0;
-  const isUp = pctChange >= 0;
-
-  // Area path
-  const aLine = candles.map((c, i) => `${i === 0 ? "M" : "L"}${xC(i).toFixed(1)},${pY(c.close).toFixed(1)}`).join(" ");
-  const aFill = aLine + ` L${xC(candles.length - 1).toFixed(1)},${(TOP + chartH).toFixed(1)} L${xC(0).toFixed(1)},${(TOP + chartH).toFixed(1)} Z`;
-
-  // Price labels
-  const prLabels = [0, 0.25, 0.5, 0.75, 1].map(t => ({
-    p: pMin + pRange * t,
-    y: pY(pMin + pRange * t),
-  }));
-
+  const lastC = last?.c ?? 0, first = candles[0]?.o ?? 0;
+  const pct = first ? (lastC - first) / first * 100 : 0;
+  const isUp = pct >= 0;
+  const grids = [0, 0.25, 0.5, 0.75, 1].map(t => ({ p: pMin + pRng * t, y: pY(pMin + pRng * t) }));
   return (
-    <div style={{ position: "relative", width: "100%", overflow: "hidden" }}>
-      {/* Mini stats above chart */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "4px 8px 2px", fontSize: 11, fontFamily: "monospace" }}>
-        <span style={{ color: MUTED }}>O</span><span style={{ color: TEXT }}>{candles[0]?.open.toFixed(2)}</span>
-        <span style={{ color: MUTED }}>H</span><span style={{ color: TEXT }}>{Math.max(...candles.map(c => c.high)).toFixed(2)}</span>
-        <span style={{ color: MUTED }}>L</span><span style={{ color: TEXT }}>{Math.min(...candles.map(c => c.low)).toFixed(2)}</span>
-        <span style={{ color: MUTED }}>C</span><span style={{ color: TEXT }}>{lastClose.toFixed(2)}</span>
-        <span style={{ color: isUp ? G : R }}>
-          {isUp ? "+" : ""}{pctChange.toFixed(2)}%
-        </span>
+    <div style={{ position:"relative", width:"100%", overflow:"hidden", background:PN3, flex:1 }}>
+      {/* OHLCV readout */}
+      <div style={{ display:"flex", alignItems:"baseline", gap:8, padding:"3px 8px", fontSize:11, fontFamily:"monospace" }}>
+        {[["O", candles[candles.length-3]?.o.toFixed(2),""],
+          ["H", Math.max(...candles.slice(-20).map(c=>c.h)).toFixed(2), G],
+          ["L", Math.min(...candles.slice(-20).map(c=>c.l)).toFixed(2), R],
+          ["C", lastC.toFixed(2),""]].map(([lbl,val,col]) => (
+          <React.Fragment key={String(lbl)}>
+            <span style={{ color:DIM }}>{lbl}</span>
+            <span style={{ color: String(col) || TXT }}>{val}</span>
+          </React.Fragment>
+        ))}
+        <span style={{ color:isUp?G:R, marginLeft:4 }}>{isUp?"+":""}{pct.toFixed(2)}%</span>
+        <span style={{ marginLeft:8, color:DIM, fontSize:10 }}>VOLUME <span style={{ color:TXT }}>17</span></span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", display:"block" }}>
         <defs>
-          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={B} stopOpacity={0.28} />
-            <stop offset="100%" stopColor={B} stopOpacity={0.01} />
+          <linearGradient id="vgg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={G} stopOpacity={0.55}/><stop offset="100%" stopColor={G} stopOpacity={0.04}/>
           </linearGradient>
-          <linearGradient id="volGradG" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={G} stopOpacity={0.55} />
-            <stop offset="100%" stopColor={G} stopOpacity={0.1} />
-          </linearGradient>
-          <linearGradient id="volGradR" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={R} stopOpacity={0.55} />
-            <stop offset="100%" stopColor={R} stopOpacity={0.1} />
+          <linearGradient id="vgr" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={R} stopOpacity={0.55}/><stop offset="100%" stopColor={R} stopOpacity={0.04}/>
           </linearGradient>
         </defs>
-
-        {/* Grid */}
-        {prLabels.map((l, i) => (
-          <line key={i} x1={0} y1={l.y} x2={W - PRPAD} y2={l.y}
-            stroke={BORDER} strokeWidth={0.6} />
+        {grids.map((g, i) => (
+          <g key={i}>
+            <line x1={0} y1={g.y} x2={W-PAD} y2={g.y} stroke={BRD} strokeWidth={0.45}/>
+            <text x={W-PAD+4} y={g.y+3} fill={DIM} fontSize={9} fontFamily="monospace">{g.p.toFixed(2)}</text>
+          </g>
         ))}
-
-        {/* Chart content */}
-        {chartType === "Area" ? (
-          <>
-            <path d={aFill} fill="url(#areaGrad)" />
-            <path d={aLine} fill="none" stroke={B} strokeWidth={1.5} />
-          </>
-        ) : chartType === "Columns" ? (
-          candles.map((c, i) => {
-            const up = c.close >= c.open;
-            const colH = Math.max(1, Math.abs(pY(c.open) - pY(c.close)));
-            return (
-              <rect key={i} x={i * (cW + gap)} y={pY(Math.max(c.open, c.close))}
-                width={cW} height={colH} fill={up ? G : R} opacity={0.85} />
-            );
-          })
-        ) : (
-          candles.map((c, i) => {
-            const up = c.close >= c.open;
-            const color = up ? G : R;
-            const bTop = pY(Math.max(c.open, c.close));
-            const bH = Math.max(1, pY(Math.min(c.open, c.close)) - bTop);
-            const cx = xC(i);
-            return (
-              <g key={i}>
-                <line x1={cx} y1={pY(c.high)} x2={cx} y2={pY(c.low)} stroke={color} strokeWidth={1} />
-                <rect x={i * (cW + gap)} y={bTop} width={cW} height={bH} fill={color} />
-              </g>
-            );
-          })
-        )}
-
-        {/* Current price line */}
-        <line x1={0} y1={pY(lastClose)} x2={W - PRPAD} y2={pY(lastClose)}
-          stroke={AMBER} strokeWidth={0.8} strokeDasharray="4,3" opacity={0.8} />
-        <rect x={W - PRPAD + 1} y={pY(lastClose) - 9} width={PRPAD - 2} height={18}
-          fill={AMBER} rx={2} />
-        <text x={W - PRPAD / 2} y={pY(lastClose) + 4}
-          fill="#000" fontSize={9.5} fontWeight={700} textAnchor="middle"
-          fontFamily="monospace">
-          {lastClose.toFixed(2)}
-        </text>
-
-        {/* Price axis */}
-        {prLabels.map((l, i) => (
-          <text key={i} x={W - PRPAD + 4} y={l.y + 3}
-            fill={MUTED} fontSize={9} fontFamily="monospace">
-            {l.p.toFixed(2)}
-          </text>
-        ))}
-
-        {/* Volume bars */}
         {candles.map((c, i) => {
-          const up = c.close >= c.open;
-          const barH = (c.volume / maxVol) * (VOL_H - 6);
+          const up = c.c >= c.o, col = up ? G : R;
+          const bTop = pY(Math.max(c.o, c.c));
+          const bH = Math.max(1, pY(Math.min(c.o, c.c)) - bTop);
+          const cx = xC(i);
           return (
-            <rect key={i} x={i * (cW + gap)}
-              y={H - VOL_H + (VOL_H - 6 - barH)}
-              width={cW} height={barH}
-              fill={`url(#volGrad${up ? "G" : "R"})`} />
+            <g key={i}>
+              <line x1={cx} y1={pY(c.h)} x2={cx} y2={pY(c.l)} stroke={col} strokeWidth={0.8}/>
+              <rect x={i*(cW+gap)} y={bTop} width={cW} height={bH} fill={col}/>
+            </g>
           );
         })}
-
-        {/* Volume label */}
-        <text x={4} y={H - VOL_H + 12} fill={MUTED} fontSize={8.5}>VOLUME</text>
+        {/* Current price dashed line */}
+        <line x1={0} y1={pY(lastC)} x2={W-PAD} y2={pY(lastC)} stroke={ORG} strokeWidth={0.7} strokeDasharray="3,2" opacity={0.85}/>
+        <rect x={W-PAD+1} y={pY(lastC)-8} width={PAD-3} height={16} fill={ORG} rx={2}/>
+        <text x={W-PAD/2} y={pY(lastC)+4} fill="#000" fontSize={9.5} fontWeight={700} textAnchor="middle" fontFamily="monospace">{lastC.toFixed(2)}</text>
+        {/* Volume bars */}
+        {candles.map((c, i) => {
+          const up = c.c >= c.o;
+          const bH2 = (c.v / maxV) * (VOL - 8);
+          return <rect key={i} x={i*(cW+gap)} y={H-VOL+(VOL-8-bH2)} width={cW} height={bH2} fill={up?"url(#vgg)":"url(#vgr)"}/>;
+        })}
+        <text x={4} y={H-VOL+11} fill={DIM} fontSize={9}>VOLUME</text>
       </svg>
     </div>
   );
 }
 
-// ─── Signal Feed (Order Book equivalent) ──────────────────────────────────────
-function SignalFeed({
-  messages,
-  activeAgent,
-  crisis,
-}: {
-  messages: Map<AgentRole, AgentMessage>;
-  activeAgent: AgentRole | null;
-  crisis: boolean;
-}) {
-  const agents = crisis ? CRISIS_AGENTS : NORMAL_AGENTS;
-  const bears = agents.filter(a => messages.get(a.role)?.stance === "bearish");
-  const bulls = agents.filter(a => messages.get(a.role)?.stance === "bullish");
-  const pending = agents.filter(a => !messages.get(a.role));
-
-  const Row = ({ a, side }: { a: typeof NORMAL_AGENTS[0]; side: "bull" | "bear" | "pending" }) => {
-    const msg = messages.get(a.role);
-    const isActive = activeAgent === a.role;
-    const color = side === "bull" ? G : side === "bear" ? R : MUTED;
-    const conf = msg?.confidence ?? null;
+// ─── Order Book ───────────────────────────────────────────────────────────────
+function OrderBook({ price }: { price: number }) {
+  const asks = useMemo(() => genBook(price, "asks", 16).reverse(), [price]);
+  const bids = useMemo(() => genBook(price, "bids", 16), [price]);
+  const maxAsk = asks[asks.length-1]?.cum ?? 1;
+  const maxBid = bids[bids.length-1]?.cum ?? 1;
+  const spread = ((asks[asks.length-1]?.price??0) - (bids[0]?.price??0)).toFixed(2);
+  const Row = ({ lvl, side, max }: { lvl: Level; side: "ask"|"bid"; max: number }) => {
+    const pct = (lvl.cum / max) * 100;
+    const col = side === "ask" ? R : G;
     return (
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr 42px 56px",
-        padding: "3px 10px", gap: 4,
-        background: isActive ? `${a.accent}18` : "transparent",
-        transition: "background 0.2s",
-      }}>
-        <div style={{
-          color, fontSize: 10.5, fontFamily: "monospace",
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          opacity: msg ? 1 : 0.25,
-        }}>
-          {isActive ? (
-            <span style={{ animation: "blink 0.6s infinite" }}>●</span>
-          ) : null}{" "}
-          {msg ? msg.headline.slice(0, 24) : a.name}
-        </div>
-        <div style={{ color, fontSize: 10.5, fontFamily: "monospace", textAlign: "right", opacity: msg ? 1 : 0.2 }}>
-          {conf !== null ? conf : "—"}
-        </div>
-        <div style={{ color, fontSize: 10.5, fontFamily: "monospace", textAlign: "right", opacity: msg ? 1 : 0.2 }}>
-          {msg ? msg.stance.slice(0, 4) : a.title.slice(0, 5)}
-        </div>
+      <div style={{ position:"relative", display:"grid", gridTemplateColumns:"1fr 1fr", padding:"1.5px 8px", fontSize:11, fontFamily:"monospace", lineHeight:"17px" }}>
+        <div style={{ position:"absolute", inset:0, background: side==="ask" ? `rgba(239,83,80,0.1)` : `rgba(38,166,154,0.1)`, width:`${pct}%`, right: side==="ask"?"0":"auto", left: side==="bid"?"0":"auto" }}/>
+        <span style={{ color:DIM, zIndex:1 }}>{lvl.amount.toFixed(8)}</span>
+        <span style={{ color:col, textAlign:"right", zIndex:1 }}>{lvl.price.toFixed(2)}</span>
       </div>
     );
   };
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Header row */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr 42px 56px",
-        padding: "4px 10px", gap: 4, borderBottom: `1px solid ${BORDER}`,
-      }}>
-        {["Signal", "Conf", "Stance"].map(h => (
-          <div key={h} style={{ fontSize: 9, color: MUTED, textTransform: "uppercase", letterSpacing: "0.06em", textAlign: h === "Signal" ? "left" : "right" }}>{h}</div>
-        ))}
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", padding:"3px 8px", borderBottom:`1px solid ${BRD}`, flexShrink:0 }}>
+        <span style={{ fontSize:9, color:DIM, textTransform:"uppercase" }}>AMOUNT (BTC)</span>
+        <span style={{ fontSize:9, color:DIM, textTransform:"uppercase", textAlign:"right" }}>PRICE (USD)</span>
       </div>
-
-      {/* Bear rows (asks) */}
-      <div style={{ flex: 1, overflow: "auto" }}>
-        {agents.filter(a => messages.get(a.role)?.stance !== "bullish").reverse().map(a => (
-          <Row key={a.role} a={a} side={messages.get(a.role)?.stance === "bearish" ? "bear" : "pending"} />
-        ))}
-
-        {/* Spread */}
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "5px 10px", background: BORDER, margin: "2px 0",
-        }}>
-          <span style={{ fontSize: 10, color: MUTED, fontFamily: "monospace" }}>SIGNAL SPREAD</span>
-          <span style={{ fontSize: 10, color: MUTED, fontFamily: "monospace" }}>
-            {Math.abs(bulls.length - bears.length)} agents
-          </span>
+      <div style={{ flex:1, overflow:"auto" }}>{asks.map((a,i) => <Row key={i} lvl={a} side="ask" max={maxAsk}/>)}</div>
+      {/* Current price band */}
+      <div style={{ padding:"3px 8px", background:`${R}22`, borderTop:`1px solid ${BRD}22`, borderBottom:`1px solid ${BRD}22`, flexShrink:0 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr" }}>
+          <span style={{ fontSize:11, fontWeight:700, color:R, fontFamily:"monospace" }}>{price.toFixed(4)}</span>
+          <span style={{ fontSize:11, color:DIM, textAlign:"right", fontFamily:"monospace" }}>≈ {price.toFixed(2)}</span>
         </div>
+      </div>
+      <div style={{ flex:1, overflow:"auto" }}>{bids.map((b,i) => <Row key={i} lvl={b} side="bid" max={maxBid}/>)}</div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", padding:"3px 8px", borderTop:`1px solid ${BRD}`, flexShrink:0, background:PN2 }}>
+        <span style={{ fontSize:10, color:DIM, fontFamily:"monospace" }}>USD SPREAD</span>
+        <span style={{ fontSize:10, color:DIM, textAlign:"right", fontFamily:"monospace" }}>{spread}</span>
+      </div>
+    </div>
+  );
+}
 
-        {/* Bull rows (bids) */}
-        {agents.filter(a => messages.get(a.role)?.stance === "bullish" || !messages.get(a.role)).map(a => (
-          <Row key={a.role} a={a} side={messages.get(a.role)?.stance === "bullish" ? "bull" : "pending"} />
-        ))}
+// ─── Chart Settings Modal ─────────────────────────────────────────────────────
+function ChartSettingsModal({ onClose }: { onClose: () => void }) {
+  const [sect, setSect] = useState<SettSect>("symbol");
+  const [nav, setNav] = useState("Visible on mouse over");
+  const [pane, setPane] = useState("Visible on mouse over");
+  const [top, setTop] = useState("10");
+  const [bot, setBot] = useState("8");
+  const [right, setRight] = useState("10");
+  const sects = [
+    { id:"symbol" as SettSect, icon:"◈", label:"Symbol" },
+    { id:"status_line" as SettSect, icon:"≡", label:"Status line" },
+    { id:"scales" as SettSect, icon:"⊣", label:"Scales" },
+    { id:"canvas" as SettSect, icon:"✏", label:"Canvas" },
+  ];
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
+      <div style={{ background:PNL, border:`1px solid ${BRD}`, borderRadius:8, width:520, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 16px", borderBottom:`1px solid ${BRD}` }}>
+          <span style={{ fontSize:14, fontWeight:600, color:TXT }}>Chart settings</span>
+          <button onClick={onClose} style={{ background:"transparent", border:"none", color:DIM, fontSize:20, cursor:"pointer", lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ display:"flex", minHeight:280 }}>
+          {/* Left sidebar */}
+          <div style={{ width:155, borderRight:`1px solid ${BRD}`, padding:"6px 0" }}>
+            {sects.map(s => (
+              <div key={s.id} onClick={() => setSect(s.id)} style={{
+                display:"flex", alignItems:"center", gap:8, padding:"9px 14px",
+                cursor:"pointer", fontSize:13, color: sect===s.id ? TXT : DIM,
+                background: sect===s.id ? PN2 : "transparent",
+                borderLeft: sect===s.id ? `2px solid ${BLU}` : "2px solid transparent",
+              }}>
+                <span style={{ fontSize:14, minWidth:16 }}>{s.icon}</span>
+                <span>{s.label}</span>
+              </div>
+            ))}
+          </div>
+          {/* Right content */}
+          <div style={{ flex:1, padding:"16px 18px", overflowY:"auto" }}>
+            {sect === "symbol" ? (
+              <>
+                <div style={{ fontSize:10, color:DIM, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:12 }}>BUTTONS</div>
+                {[["Navigation", nav, setNav], ["Pane", pane, setPane]].map(([lbl, val, fn]) => (
+                  <div key={String(lbl)} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+                    <span style={{ fontSize:13, color:TXT }}>{String(lbl)}</span>
+                    <div style={{ position:"relative" }}>
+                      <select value={String(val)} onChange={e => (fn as Function)(e.target.value)}
+                        style={{ background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:12, padding:"5px 28px 5px 8px", borderRadius:4, width:200, cursor:"pointer", outline:"none", appearance:"none" }}>
+                        {["Visible on mouse over","Always visible","Hidden"].map(o => <option key={o}>{o}</option>)}
+                      </select>
+                      <span style={{ position:"absolute", right:8, top:"50%", transform:"translateY(-50%)", color:DIM, fontSize:10, pointerEvents:"none" }}>▾</span>
+                    </div>
+                  </div>
+                ))}
+                <div style={{ fontSize:10, color:DIM, textTransform:"uppercase", letterSpacing:"0.08em", margin:"16px 0 12px" }}>MARGINS</div>
+                {[["Top", top, setTop, "%"], ["Bottom", bot, setBot, "%"], ["Right", right, setRight, "bars"]].map(([lbl,val,fn,unit]) => (
+                  <div key={String(lbl)} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+                    <span style={{ fontSize:13, color:TXT }}>{String(lbl)}</span>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <input value={String(val)} onChange={e => (fn as Function)(e.target.value)}
+                        style={{ background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:12, padding:"5px 8px", borderRadius:4, width:80, textAlign:"right", outline:"none" }}/>
+                      <span style={{ fontSize:12, color:DIM, width:30 }}>{String(unit)}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div style={{ color:DIM, fontSize:13, paddingTop:20, textAlign:"center" }}>
+                {sects.find(s => s.id === sect)?.label} settings
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 16px", borderTop:`1px solid ${BRD}` }}>
+          <div style={{ position:"relative" }}>
+            <select style={{ background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:12, padding:"5px 24px 5px 10px", borderRadius:4, cursor:"pointer", outline:"none", appearance:"none" }}>
+              <option>Template</option>
+            </select>
+            <span style={{ position:"absolute", right:8, top:"50%", transform:"translateY(-50%)", color:DIM, fontSize:10, pointerEvents:"none" }}>▾</span>
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={onClose} style={{ background:"transparent", border:`1px solid ${BRD}`, color:TXT, fontSize:13, padding:"6px 20px", borderRadius:6, cursor:"pointer" }}>Cancel</button>
+            <button onClick={onClose} style={{ background:BLU, border:"none", color:"#fff", fontSize:13, fontWeight:600, padding:"6px 20px", borderRadius:6, cursor:"pointer" }}>Ok</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Go To Modal ──────────────────────────────────────────────────────────────
+function GoToModal({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<"date"|"range">("date");
+  const [selDay, setSelDay] = useState(10);
+  const [month, setMonth] = useState(new Date(2024, 9, 1));
+  const [dateStr, setDateStr] = useState("2024-10-10");
+  const [timeStr, setTimeStr] = useState("01:00");
+  const daysInMonth = new Date(month.getFullYear(), month.getMonth()+1, 0).getDate();
+  const firstDow = (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;
+  const monthLabel = month.toLocaleString("en", { month:"long", year:"numeric" });
+  const cells: (number|null)[] = [];
+  for (let i=0; i<firstDow; i++) cells.push(null);
+  for (let d=1; d<=daysInMonth; d++) cells.push(d);
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
+      <div style={{ background:PNL, border:`1px solid ${BRD}`, borderRadius:8, width:340, overflow:"hidden" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 16px" }}>
+          <span style={{ fontSize:14, fontWeight:600, color:TXT }}>Go to</span>
+          <button onClick={onClose} style={{ background:"transparent", border:"none", color:DIM, fontSize:20, cursor:"pointer", lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ display:"flex", margin:"0 16px", borderBottom:`1px solid ${BRD}` }}>
+          {(["date","range"] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)} style={{
+              flex:1, padding:"8px 0", background:"transparent", border:"none",
+              borderBottom: tab===t ? `2px solid ${BLU}` : "2px solid transparent",
+              color: tab===t ? TXT : DIM, fontSize:13, cursor:"pointer",
+              fontWeight: tab===t ? 600 : 400, marginBottom:-1,
+            }}>{t === "date" ? "Date" : "Custom range"}</button>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:8, padding:"12px 16px" }}>
+          <div style={{ flex:1, display:"flex", alignItems:"center", background:PN2, border:`1px solid ${BRD}`, borderRadius:4, padding:"6px 8px", gap:4 }}>
+            <input value={dateStr} onChange={e => setDateStr(e.target.value)}
+              style={{ flex:1, background:"transparent", border:"none", color:TXT, fontSize:13, outline:"none" }}/>
+            <span style={{ color:DIM }}>📅</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", background:PN2, border:`1px solid ${BRD}`, borderRadius:4, padding:"6px 8px", gap:4 }}>
+            <input value={timeStr} onChange={e => setTimeStr(e.target.value)}
+              style={{ background:"transparent", border:"none", color:TXT, fontSize:13, outline:"none", width:48 }}/>
+            <span style={{ color:DIM }}>🕐</span>
+          </div>
+        </div>
+        <div style={{ padding:"0 16px 12px" }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+            <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth()-1,1))}
+              style={{ background:"transparent", border:"none", color:DIM, fontSize:18, cursor:"pointer", lineHeight:1 }}>‹</button>
+            <span style={{ fontSize:13, fontWeight:600, color:TXT }}>{monthLabel}</span>
+            <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth()+1,1))}
+              style={{ background:"transparent", border:"none", color:DIM, fontSize:18, cursor:"pointer", lineHeight:1 }}>›</button>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2 }}>
+            {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => (
+              <div key={d} style={{ fontSize:11, color:DIM, textAlign:"center", padding:"2px 0" }}>{d}</div>
+            ))}
+            {cells.map((d, i) => (
+              <div key={i} onClick={() => d && setSelDay(d)} style={{
+                fontSize:12.5, textAlign:"center", padding:"5px 0", cursor: d ? "pointer" : "default",
+                borderRadius:"50%",
+                background: d===selDay ? BLU : "transparent",
+                color: d ? (d===selDay ? "#fff" : TXT) : "transparent",
+                fontWeight: d===selDay ? 700 : 400,
+              }}>{d ?? ""}</div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:8, padding:"10px 16px", borderTop:`1px solid ${BRD}` }}>
+          <button onClick={onClose} style={{ flex:1, padding:"8px", background:"transparent", border:`1px solid ${BRD}`, color:TXT, fontSize:13, borderRadius:6, cursor:"pointer" }}>Cancel</button>
+          <button onClick={onClose} style={{ flex:1, padding:"8px", background:BLU, border:"none", color:"#fff", fontSize:13, fontWeight:600, borderRadius:6, cursor:"pointer" }}>Go to</button>
+        </div>
       </div>
     </div>
   );
@@ -287,639 +347,464 @@ function SignalFeed({
 
 // ─── Main Terminal ────────────────────────────────────────────────────────────
 export default function QuantTerminal() {
-  const [symbol, setSymbol] = useState("NVDA");
-  const [inputVal, setInputVal] = useState("NVDA");
-  const [tf, setTf] = useState("4H");
-  const [chartType, setChartType] = useState("Candles");
-  const [showChartMenu, setShowChartMenu] = useState(false);
+  const [sym, setSym] = useState("BTC");
+  const [inputSym, setInputSym] = useState("BTC");
+  const [tf, setTf] = useState<Tf>("5m");
+  const [chartTab, setChartTab] = useState<ChartTab>("price");
+  const [bookTab, setBookTab] = useState<BookTab>("order_book");
+  const [side, setSide] = useState<Side>("buy");
+  const [oType, setOType] = useState<OType>("LIMIT");
+  const [modal, setModal] = useState<Modal>("none");
+  const [banner, setBanner] = useState(true);
   const [crisis, setCrisis] = useState(false);
   const [running, setRunning] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
-  const [messages, setMessages] = useState<Map<AgentRole, AgentMessage>>(new Map());
-  const [thesis, setThesis] = useState<CIOThesis | null>(null);
-  const [activeAgent, setActiveAgent] = useState<AgentRole | null>(null);
-  const [feedTab, setFeedTab] = useState<"order_book" | "history">("order_book");
-  const [chartTab, setChartTab] = useState<"price" | "depth">("price");
-  const abortRef = useRef<AbortController | null>(null);
+  const [messages, setMessages] = useState<Map<string,any>>(new Map());
+  const [thesis, setThesis] = useState<any>(null);
+  const abortRef = useRef<AbortController|null>(null);
+  const candles = useMemo(() => genCandles(sym, tf, 120), [sym, tf]);
+  const lastC = candles[candles.length-1]?.c ?? 70000;
+  const firstO = candles[0]?.o ?? 70000;
+  const high24 = Math.max(...candles.map(c => c.h));
+  const low24 = Math.min(...candles.map(c => c.l));
+  const vol24 = candles.reduce((a,c) => a+c.v, 0);
+  const pct = firstO ? (lastC-firstO)/firstO*100 : 0;
+  const isUp = pct >= 0;
+  const SYMS = ["NVDA","AAPL","MSFT","TSLA","BTC","ETH","SOL","SPY"];
 
-  const agents = crisis ? CRISIS_AGENTS : NORMAL_AGENTS;
-
-  // Synthetic price stats from candle data
-  const candles = useMemo(() => generateCandles(symbol, tf), [symbol, tf]);
-  const lastClose = candles[candles.length - 1]?.close ?? 0;
-  const firstOpen = candles[0]?.open ?? 0;
-  const high24 = Math.max(...candles.map(c => c.high));
-  const low24 = Math.min(...candles.map(c => c.low));
-  const vol24 = candles.reduce((a, c) => a + c.volume, 0);
-  const change24 = lastClose - firstOpen;
-  const change24Pct = firstOpen ? change24 / firstOpen * 100 : 0;
-  const isUp = change24Pct >= 0;
-
-  const runResearch = useCallback(async (sym: string) => {
+  const runResearch = useCallback(async (s: string) => {
     if (running) { abortRef.current?.abort(); setRunning(false); return; }
-    const s = sym.trim().toUpperCase();
-    if (!s) return;
-    setSymbol(s);
-    setRunning(true);
-    setMessages(new Map());
-    setThesis(null);
+    const sym2 = s.trim().toUpperCase(); if (!sym2) return;
+    setSym(sym2); setRunning(true); setMessages(new Map()); setThesis(null);
     setStatusMsg("Connecting…");
-    setActiveAgent(null);
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = new AbortController(); abortRef.current = ctrl;
     try {
       const res = await fetch("/api/research", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: s, crisis }),
-        signal: ctrl.signal,
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ symbol:sym2, crisis }), signal:ctrl.signal,
       });
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No body");
-      const dec = new TextDecoder();
-      let buf = "";
+      const reader = res.body?.getReader(); if (!reader) throw new Error("No body");
+      const dec = new TextDecoder(); let buf = "";
       while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
+        const { value, done } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream:true });
         const lines = buf.split("\n"); buf = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
-            const ev: StreamEvent = JSON.parse(line);
-            if (ev.type === "status") {
-              setStatusMsg(ev.step ?? "");
-              const step = (ev.step ?? "").toLowerCase();
-              for (const a of agents) {
-                if (step.includes(a.name.toLowerCase())) { setActiveAgent(a.role); break; }
-              }
-            } else if (ev.type === "agent_message" && ev.message) {
-              setMessages(p => new Map(p).set(ev.message!.role, ev.message!));
-            } else if (ev.type === "thesis" && ev.thesis) {
-              setThesis(ev.thesis);
-            } else if (ev.type === "done") {
-              setStatusMsg(""); setActiveAgent(null);
-            }
+            const ev = JSON.parse(line);
+            if (ev.type === "status") setStatusMsg(ev.step ?? "");
+            else if (ev.type === "agent_message" && ev.message) setMessages(p => new Map(p).set(ev.message.role, ev.message));
+            else if (ev.type === "thesis" && ev.thesis) setThesis(ev.thesis);
+            else if (ev.type === "done") setStatusMsg("");
           } catch { /* skip */ }
         }
       }
-    } catch (e: unknown) {
-      if ((e as Error)?.name !== "AbortError") setStatusMsg("Request failed");
-    } finally {
-      setRunning(false); setActiveAgent(null);
-    }
-  }, [running, crisis, agents]);
+    } catch (e: any) { if (e?.name !== "AbortError") setStatusMsg("Failed"); }
+    finally { setRunning(false); }
+  }, [running, crisis]);
 
-  const dirColor = thesis ? (thesis.direction === "BUY" ? G : thesis.direction === "SELL" ? R : AMBER) : G;
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString("en", { hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false }) + " (UTC+6:30)";
+  const dirColor = thesis ? (thesis.direction==="BUY" ? G : thesis.direction==="SELL" ? R : AMB) : G;
 
   return (
     <>
       <style>{`
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: ${NAVY}; color: ${TEXT}; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-        ::-webkit-scrollbar { width: 3px; height: 3px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: ${BORDER}; border-radius: 2px; }
-        input:focus { outline: none; }
-        @keyframes blink { 0%,100%{opacity:1}50%{opacity:0} }
-        @keyframes slideUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
-        button { cursor: pointer; }
+        *{box-sizing:border-box;margin:0;padding:0}
+        html,body{height:100%;background:${BG};color:${TXT};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+        ::-webkit-scrollbar{width:3px;height:3px}
+        ::-webkit-scrollbar-track{background:transparent}
+        ::-webkit-scrollbar-thumb{background:${BRD};border-radius:2px}
+        input:focus,select:focus{outline:none}
+        button{cursor:pointer;font-family:inherit}
+        select{appearance:none;-webkit-appearance:none}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+        @keyframes slideUp{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+        .tb-btn:hover{color:${TXT}!important;background:${PN2}!important}
+        .nav-item:hover{color:${TXT}!important}
       `}</style>
 
-      <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: NAVY }}>
+      <div style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", background:BG }}>
 
-        {/* ── ICON SIDEBAR (48px) ── */}
-        <nav style={{
-          width: 48, flexShrink: 0,
-          background: NAVY,
-          borderRight: `1px solid ${BORDER}`,
-          display: "flex", flexDirection: "column", alignItems: "center",
-          padding: "12px 0", gap: 4,
-        }}>
+        {/* ══ TOP HEADER BAR ══════════════════════════════════════════════════ */}
+        <div style={{ display:"flex", alignItems:"center", background:PNL, borderBottom:`1px solid ${BRD}`, height:44, flexShrink:0, padding:"0 8px", gap:4 }}>
           {/* Logo */}
-          <div style={{
-            width: 28, height: 28, borderRadius: "50%",
-            background: "linear-gradient(135deg, #6366f1, #06b6d4)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 12, fontWeight: 800, color: "#fff", marginBottom: 8,
-          }}>R</div>
-
-          {[
-            { icon: "⌂", label: "Dashboard", href: "/" },
-            { icon: "◎", label: "Research", href: "/research" },
-            { icon: "∿", label: "Quant", href: "/quant", active: true },
-            { icon: "⊞", label: "Signals", href: "#" },
-            { icon: "◰", label: "Portfolio", href: "#" },
-            { icon: "⊕", label: "API", href: "#" },
-            { icon: "○", label: "History", href: "#" },
-          ].map(item => (
-            <a key={item.label} href={item.href} title={item.label} style={{
-              width: 36, height: 36, borderRadius: 8,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: item.active ? "rgba(59,130,246,0.15)" : "transparent",
-              color: item.active ? B : MUTED,
-              fontSize: 16, textDecoration: "none",
-              position: "relative",
-              transition: "all 0.15s",
-            }}>
-              {item.icon}
-              {item.active && (
-                <div style={{
-                  position: "absolute", right: 3, top: "50%", transform: "translateY(-50%)",
-                  width: 4, height: 4, borderRadius: "50%", background: B,
-                }} />
-              )}
-            </a>
-          ))}
-
-          <div style={{ flex: 1 }} />
-
-          {/* Advanced toggle (bottom) */}
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <span style={{ fontSize: 10, color: MUTED, textAlign: "center", lineHeight: 1.2 }}>
-              ADV
-            </span>
-            <div
-              onClick={() => setCrisis(p => !p)}
-              style={{
-                width: 28, height: 16, borderRadius: 8,
-                background: crisis ? R : "#1a2540",
-                position: "relative", cursor: "pointer", transition: "background 0.2s",
-              }}
-            >
-              <div style={{
-                position: "absolute", top: 2, left: crisis ? 14 : 2,
-                width: 12, height: 12, borderRadius: "50%", background: "#fff",
-                transition: "left 0.2s",
-              }} />
-            </div>
+          <div style={{ width:28, height:28, borderRadius:"50%", background:"linear-gradient(135deg,#6366f1,#06b6d4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800, color:"#fff", marginRight:4, flexShrink:0 }}>R</div>
+          {/* Symbol pill */}
+          <div style={{ display:"flex", alignItems:"center", gap:6, background:PN2, padding:"4px 10px", borderRadius:6, cursor:"pointer", flexShrink:0, border:`1px solid ${BRD}` }}>
+            <div style={{ width:16, height:16, borderRadius:"50%", background:ORG, display:"flex", alignItems:"center", justifyContent:"center", fontSize:8, fontWeight:800, color:"#fff" }}>₿</div>
+            <span style={{ fontSize:13, fontWeight:700 }}>{sym}-USDC</span>
+            <span style={{ fontSize:9, color:DIM }}>▾</span>
           </div>
-        </nav>
-
-        {/* ── RIGHT OF SIDEBAR ── */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-
-          {/* ── TOP STATS BAR ── */}
-          <div style={{
-            display: "flex", alignItems: "center",
-            borderBottom: `1px solid ${BORDER}`,
-            height: 44, flexShrink: 0, padding: "0 12px", gap: 8,
-          }}>
-            {/* Symbol pair pill */}
-            <div style={{
-              display: "flex", alignItems: "center", gap: 6,
-              background: "#1a2540", padding: "5px 10px", borderRadius: 6,
-              cursor: "pointer", flexShrink: 0,
-            }}>
-              <div style={{
-                width: 18, height: 18, borderRadius: "50%",
-                background: `hsl(${symbol.charCodeAt(0) * 20 % 360}, 60%, 35%)`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 8, fontWeight: 800,
-                color: `hsl(${symbol.charCodeAt(0) * 20 % 360}, 80%, 75%)`,
-              }}>{symbol.slice(0, 2)}</div>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{symbol}-USD</span>
-              <span style={{ fontSize: 10, color: MUTED }}>▾</span>
-            </div>
-
-            {/* Stats strip */}
+          {/* Stats strip */}
+          <div style={{ display:"flex", alignItems:"center", gap:0 }}>
             {[
-              { label: "LAST PRICE (24H)", value: lastClose.toFixed(2), color: isUp ? G : R },
-              { label: "24H CHANGE", value: `${isUp ? "+" : ""}${change24Pct.toFixed(2)}%`, color: isUp ? G : R },
-              { label: "24H VOLUME", value: `$${(vol24 * lastClose / 1e6).toFixed(1)}M`, color: TEXT },
-              { label: "24H HIGH", value: high24.toFixed(2), color: TEXT },
-              { label: "24H LOW", value: low24.toFixed(2), color: TEXT },
-              { label: "REGIME", value: crisis ? "CRISIS" : "BULL QUIET", color: crisis ? R : G },
+              { lbl:"LAST PRICE (24H)", val:`$${lastC.toFixed(2)}`, extra:`${isUp?"+":""}${pct.toFixed(2)}%`, ec:isUp?G:R },
+              { lbl:"24H VOLUME", val:`$${(vol24*lastC/1e6).toFixed(3)}M` },
+              { lbl:"24H HIGH", val:`$${high24.toFixed(2)}` },
+              { lbl:"24H LOW", val:`$${low24.toFixed(2)}` },
             ].map(s => (
-              <div key={s.label} style={{ flexShrink: 0, marginLeft: 12 }}>
-                <div style={{ fontSize: 9, color: MUTED, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: s.color, fontFamily: "monospace" }}>{s.value}</div>
+              <div key={s.lbl} style={{ padding:"0 10px", borderRight:`1px solid ${BRD}` }}>
+                <div style={{ fontSize:8.5, color:DIM, textTransform:"uppercase", letterSpacing:"0.05em" }}>{s.lbl}</div>
+                <div style={{ fontSize:11.5, fontWeight:600, fontFamily:"monospace", display:"flex", gap:5, alignItems:"baseline" }}>
+                  <span>{s.val}</span>
+                  {s.extra && <span style={{ fontSize:11, color:s.ec }}>{s.extra}</span>}
+                </div>
               </div>
             ))}
+          </div>
+          <div style={{ flex:1 }}/>
+          <button style={{ padding:"5px 12px", borderRadius:6, background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:12, fontWeight:600 }}>Transfer</button>
+          {["🔔","?","⊞"].map(ic => (
+            <button key={ic} className="tb-btn" style={{ width:28, height:28, background:"transparent", border:"none", color:DIM, fontSize:13, display:"flex", alignItems:"center", justifyContent:"center", borderRadius:4, transition:"all 0.15s" }}>{ic}</button>
+          ))}
+          <div style={{ width:28, height:28, borderRadius:"50%", background:BLU, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:"#fff", marginLeft:2 }}>S</div>
+        </div>
 
-            <div style={{ flex: 1 }} />
+        {/* ══ INFO BANNER ═════════════════════════════════════════════════════ */}
+        {banner && (
+          <div style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 12px", background:"#091e3a", borderBottom:`1px solid #173261`, flexShrink:0 }}>
+            <span style={{ fontSize:13 }}>ℹ️</span>
+            <div style={{ flex:1, fontSize:12 }}>
+              <span style={{ fontWeight:600 }}>We have lowered our Advanced fees</span>
+              <span style={{ color:DIM }}> Trade as low as 0.00% maker and 0.05% taker fee with Coinbase Advanced. </span>
+              <span style={{ color:BLU, cursor:"pointer" }}>Learn more.</span>
+            </div>
+            <button onClick={() => setBanner(false)} style={{ background:"transparent", border:"none", color:DIM, fontSize:18, cursor:"pointer", lineHeight:1 }}>×</button>
+          </div>
+        )}
 
-            {/* Transfer button */}
-            <button style={{
-              padding: "6px 14px", borderRadius: 6,
-              background: "#1a2540", border: `1px solid ${BORDER}`,
-              color: TEXT, fontSize: 12, fontWeight: 600,
-            }}>Transfer</button>
+        {/* ══ MAIN CONTENT ════════════════════════════════════════════════════ */}
+        <div style={{ flex:1, display:"flex", overflow:"hidden" }}>
+
+          {/* ── Left sidebar (icon-only like Coinbase Advanced) ─────────────── */}
+          <nav style={{ width:48, background:PNL, borderRight:`1px solid ${BRD}`, display:"flex", flexDirection:"column", alignItems:"center", padding:"6px 0", gap:2, flexShrink:0 }}>
+            {[
+              { icon:"◉", lbl:"Spot", active:true },
+              { icon:"⊘", lbl:"Derivatives" },
+              { icon:"⊡", lbl:"Portfolio" },
+              { icon:"☰", lbl:"Orders" },
+              { icon:"⊛", lbl:"Referral" },
+              { icon:"⊕", lbl:"API" },
+              { icon:"◎", lbl:"Earn" },
+              { icon:"⋯", lbl:"More" },
+            ].map(it => (
+              <div key={it.lbl} className="nav-item" title={it.lbl} style={{
+                width:36, height:36, borderRadius:6,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                background: it.active ? `${BLU}18` : "transparent",
+                color: it.active ? BLU : DIM, fontSize:16, cursor:"pointer",
+                transition:"all 0.15s",
+              }}>{it.icon}</div>
+            ))}
+            <div style={{ flex:1 }}/>
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, paddingBottom:8 }}>
+              <span style={{ fontSize:8.5, color:DIM, textTransform:"uppercase" }}>ADV</span>
+              <div onClick={() => setCrisis(p => !p)} style={{
+                width:28, height:16, borderRadius:8, position:"relative", cursor:"pointer",
+                background: crisis ? R : "#183060", transition:"background 0.2s",
+              }}>
+                <div style={{ position:"absolute", top:2, left:crisis?14:2, width:12, height:12, borderRadius:"50%", background:"#fff", transition:"left 0.2s" }}/>
+              </div>
+            </div>
+          </nav>
+
+          {/* ── Chart panel ─────────────────────────────────────────────────── */}
+          <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0 }}>
+
+            {/* Chart tabs */}
+            <div style={{ display:"flex", alignItems:"center", background:PNL, borderBottom:`1px solid ${BRD}`, height:34, flexShrink:0, paddingLeft:8 }}>
+              {(["price","depth"] as ChartTab[]).map(t => (
+                <button key={t} onClick={() => setChartTab(t)} style={{
+                  padding:"0 14px", height:"100%", background:"transparent", border:"none",
+                  borderBottom: chartTab===t ? `2px solid ${BLU}` : "2px solid transparent",
+                  color: chartTab===t ? TXT : DIM, fontSize:12, fontWeight: chartTab===t ? 600:400,
+                  marginBottom:-1, cursor:"pointer",
+                }}>{t==="price"?"Price chart":"Depth chart"}</button>
+              ))}
+            </div>
+
+            {/* Chart toolbar — exact Coinbase Advanced layout */}
+            <div style={{ display:"flex", alignItems:"center", gap:2, padding:"0 8px", borderBottom:`1px solid ${BRD}`, height:36, flexShrink:0, background:PNL }}>
+              {/* Timeframe pill */}
+              <div style={{ display:"flex", alignItems:"center", background:PN2, border:`1px solid ${BRD}`, borderRadius:4, padding:"2px 8px", fontSize:12, color:TXT, cursor:"pointer", gap:4, marginRight:4 }}>
+                {tf} <span style={{ fontSize:9, color:DIM }}>▾</span>
+              </div>
+              <div style={{ width:1, height:16, background:BRD }}/>
+              {[
+                { icon:"⊕", title:"Crosshair" },
+                { icon:"∥", title:"Bar type" },
+                { icon:"←", title:"Back" },
+              ].map(t => (
+                <button key={t.icon} className="tb-btn" title={t.title} style={{ width:26, height:26, background:"transparent", border:"none", color:DIM, fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", borderRadius:4, transition:"all 0.15s" }}>{t.icon}</button>
+              ))}
+              <button className="tb-btn" style={{ background:"transparent", border:"none", color:DIM, fontSize:12, padding:"0 6px", display:"flex", alignItems:"center", gap:3, borderRadius:4, transition:"all 0.15s" }}>
+                <span style={{ fontSize:10 }}>⊹</span> Indicators
+              </button>
+              <button className="tb-btn" style={{ width:26, height:26, background:"transparent", border:"none", color:DIM, fontSize:14, borderRadius:4, transition:"all 0.15s" }}>→</button>
+              <div style={{ flex:1 }}/>
+              {/* Right icons */}
+              {[
+                { icon:"✦", title:"Alerts" },
+                { icon:"⚙", title:"Chart settings", action: () => setModal("chart_settings") },
+                { icon:"⊡", title:"Fullscreen" },
+                { icon:"📷", title:"Snapshot" },
+              ].map(t => (
+                <button key={t.icon} className="tb-btn" title={t.title} onClick={t.action}
+                  style={{ width:26, height:26, background:"transparent", border:"none", color:DIM, fontSize:t.icon==="📷"?12:14, display:"flex", alignItems:"center", justifyContent:"center", borderRadius:4, transition:"all 0.15s" }}>{t.icon}</button>
+              ))}
+            </div>
+
+            {/* Candlestick chart */}
+            <CandleChart sym={sym} tf={tf} />
+
+            {/* Bottom timeframe bar */}
+            <div style={{ display:"flex", alignItems:"center", gap:1, padding:"0 8px", borderTop:`1px solid ${BRD}`, height:30, flexShrink:0, background:PNL }}>
+              {(["6M","3M","1M","5D","1D","4H","1H"] as const).map(t => (
+                <button key={t} onClick={() => {
+                  if (t==="1H") setTf("1H");
+                  else if (t==="4H") setTf("4H");
+                  else if (t==="1D") setTf("1D");
+                  else if (t==="5D") setTf("1D");
+                }} style={{
+                  padding:"2px 7px", borderRadius:3,
+                  background: (t==="5m"&&tf==="5m")||(t===tf) ? PN2 : "transparent",
+                  border:"none", color: t===tf ? TXT : DIM, fontSize:11,
+                  fontWeight: t===tf ? 600:400, cursor:"pointer",
+                }}>{t}</button>
+              ))}
+              <button style={{ width:22, height:22, background:"transparent", border:"none", color:DIM, fontSize:12, cursor:"pointer" }}>→</button>
+              <div style={{ flex:1 }}/>
+              <button onClick={() => setModal("go_to")} style={{ background:"transparent", border:"none", color:DIM, fontSize:10, cursor:"pointer", fontFamily:"monospace" }}>{timeStr}</button>
+              <div style={{ width:1, height:12, background:BRD, margin:"0 4px" }}/>
+              {["%","LOG","AUTO"].map(b => (
+                <button key={b} className="tb-btn" style={{ padding:"2px 5px", background:"transparent", border:"none", color:DIM, fontSize:10, borderRadius:3, transition:"all 0.15s" }}>{b}</button>
+              ))}
+            </div>
           </div>
 
-          {/* ── MAIN AREA ── */}
-          <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-
-            {/* ── CHART PANEL ── */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-
-              {/* Chart tabs + toolbar */}
-              <div style={{
-                display: "flex", alignItems: "center",
-                borderBottom: `1px solid ${BORDER}`,
-                height: 36, padding: "0 12px", gap: 12, flexShrink: 0,
-              }}>
-                {/* Price / Depth tabs */}
-                {[
-                  { id: "price", label: "Price chart" },
-                  { id: "depth", label: "Depth chart" },
-                ].map(t => (
-                  <button key={t.id} onClick={() => setChartTab(t.id as "price" | "depth")} style={{
-                    background: "transparent", border: "none", padding: "0 0 8px",
-                    fontSize: 12, fontWeight: chartTab === t.id ? 600 : 400,
-                    color: chartTab === t.id ? TEXT : MUTED,
-                    borderBottom: chartTab === t.id ? `2px solid ${B}` : "2px solid transparent",
-                    marginBottom: -1,
-                  }}>{t.label}</button>
-                ))}
-
-                <div style={{ width: 1, height: 16, background: BORDER }} />
-
-                {/* Timeframe */}
-                {TIMEFRAMES.map(t => (
-                  <button key={t} onClick={() => setTf(t)} style={{
-                    background: tf === t ? "#1a2540" : "transparent",
-                    border: "none",
-                    color: tf === t ? TEXT : MUTED,
-                    fontSize: 11, fontWeight: tf === t ? 600 : 400,
-                    padding: "3px 6px", borderRadius: 4,
-                  }}>{t}</button>
-                ))}
-
-                <div style={{ width: 1, height: 16, background: BORDER }} />
-
-                {/* Chart type dropdown */}
-                <div style={{ position: "relative" }}>
-                  <button
-                    onClick={() => setShowChartMenu(p => !p)}
-                    style={{
-                      background: "transparent", border: "none",
-                      color: MUTED, fontSize: 11, padding: "3px 6px",
-                      display: "flex", alignItems: "center", gap: 4,
-                    }}
-                  >
-                    <span>⊞</span> {chartType} <span>▾</span>
-                  </button>
-                  {showChartMenu && (
-                    <div style={{
-                      position: "absolute", top: "100%", left: 0, zIndex: 100,
-                      background: PANEL, border: `1px solid ${BORDER}`,
-                      borderRadius: 8, padding: "6px 0", minWidth: 160,
-                      boxShadow: "0 8px 24px #00000060",
-                      animation: "slideUp 0.15s ease",
-                    }}>
-                      {CHART_TYPES.map(ct => (
-                        <button key={ct} onClick={() => { setChartType(ct); setShowChartMenu(false); }}
-                          style={{
-                            display: "block", width: "100%", textAlign: "left",
-                            padding: "7px 16px", background: ct === chartType ? "#1a2540" : "transparent",
-                            border: "none", color: ct === chartType ? TEXT : MUTED,
-                            fontSize: 12, cursor: "pointer",
-                          }}>{ct}</button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ flex: 1 }} />
-
-                {/* Indicators */}
-                <button style={{
-                  background: "transparent", border: "none",
-                  color: MUTED, fontSize: 11, padding: "3px 8px",
-                  display: "flex", alignItems: "center", gap: 4,
-                }}>∿ Indicators</button>
-              </div>
-
-              {/* Chart area */}
-              <div style={{ flex: 1, overflow: "hidden", background: PANEL }}>
-                <Chart symbol={symbol} tf={tf} chartType={chartType} />
-              </div>
-
-              {/* ── BOTTOM ORDERS TABLE ── */}
-              <div style={{
-                borderTop: `1px solid ${BORDER}`, flexShrink: 0, maxHeight: 180,
-                overflow: "auto",
-              }}>
-                <div style={{
-                  display: "flex", alignItems: "center",
-                  padding: "6px 12px", gap: 12, borderBottom: `1px solid ${BORDER}`,
-                  position: "sticky", top: 0, background: NAVY,
-                }}>
-                  <span style={{ fontSize: 12, fontWeight: 600 }}>Agent Results</span>
-                  {running && (
-                    <span style={{ fontSize: 11, color: AMBER, animation: "pulse 1s infinite" }}>
-                      ● {statusMsg}
-                    </span>
-                  )}
-                  <div style={{ flex: 1 }} />
-                  <span style={{ fontSize: 11, color: MUTED }}>{messages.size} / {agents.length} complete</span>
-                </div>
-
-                {messages.size === 0 ? (
-                  <div style={{
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    padding: "24px 0", flexDirection: "column", gap: 8,
-                  }}>
-                    <div style={{ fontSize: 24 }}>≡</div>
-                    <div style={{ fontSize: 12, color: MUTED }}>No results yet — run research to populate</div>
-                  </div>
-                ) : (
-                  <>
-                    {/* Table header */}
-                    <div style={{
-                      display: "grid",
-                      gridTemplateColumns: "100px 80px 80px 80px 1fr 80px 80px",
-                      padding: "4px 12px", borderBottom: `1px solid ${BORDER}`,
-                      gap: 8,
-                    }}>
-                      {["AGENT", "ROLE", "STANCE", "CONF", "HEADLINE", "DIRECTION", "STATUS"].map(h => (
-                        <div key={h} style={{ fontSize: 9, color: MUTED, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</div>
-                      ))}
-                    </div>
-                    {Array.from(messages.values()).map(msg => {
-                      const agentDef = agents.find(a => a.role === msg.role);
-                      const color = msg.stance === "bullish" ? G : msg.stance === "bearish" ? R : MUTED;
-                      return (
-                        <div key={msg.role} style={{
-                          display: "grid",
-                          gridTemplateColumns: "100px 80px 80px 80px 1fr 80px 80px",
-                          padding: "6px 12px", borderBottom: `1px solid ${BORDER}10`,
-                          gap: 8, alignItems: "center",
-                          animation: "slideUp 0.2s ease",
-                        }}>
-                          <div style={{ fontSize: 12, fontWeight: 600 }}>
-                            {agentDef?.emoji} {agentDef?.name ?? msg.role}
-                          </div>
-                          <div style={{ fontSize: 11, color: MUTED }}>{agentDef?.title ?? msg.role}</div>
-                          <div style={{ fontSize: 11, color, fontWeight: 600, textTransform: "uppercase" }}>{msg.stance.slice(0, 4)}</div>
-                          <div style={{ fontSize: 11, fontFamily: "monospace", color }}>
-                            {msg.confidence ?? "—"}
-                          </div>
-                          <div style={{
-                            fontSize: 11, color: "#94a3b8",
-                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          }}>{msg.headline}</div>
-                          <div style={{
-                            fontSize: 10, fontWeight: 700, color,
-                            background: `${color}18`, padding: "2px 6px", borderRadius: 4,
-                            textAlign: "center",
-                          }}>
-                            {msg.stance === "bullish" ? "LONG" : msg.stance === "bearish" ? "SHORT" : "FLAT"}
-                          </div>
-                          <div style={{ fontSize: 11, color: G }}>Filled</div>
-                        </div>
-                      );
-                    })}
-                  </>
-                )}
-              </div>
+          {/* ── Order Book ──────────────────────────────────────────────────── */}
+          <div style={{ width:215, borderLeft:`1px solid ${BRD}`, display:"flex", flexDirection:"column", flexShrink:0 }}>
+            {/* Tabs */}
+            <div style={{ display:"flex", borderBottom:`1px solid ${BRD}`, height:34, flexShrink:0 }}>
+              {(["order_book","trade_history"] as BookTab[]).map(t => (
+                <button key={t} onClick={() => setBookTab(t)} style={{
+                  flex:1, background:"transparent", border:"none",
+                  borderBottom: bookTab===t ? `2px solid ${BLU}` : "2px solid transparent",
+                  color: bookTab===t ? TXT : DIM, fontSize:10.5, cursor:"pointer",
+                  fontWeight: bookTab===t ? 600:400, marginBottom:-1,
+                }}>{t==="order_book"?"Order book":"Trade history"}</button>
+              ))}
             </div>
-
-            {/* ── SIGNAL FEED (Order book) ── */}
-            <div style={{
-              width: 240, flexShrink: 0,
-              borderLeft: `1px solid ${BORDER}`,
-              display: "flex", flexDirection: "column",
-              overflow: "hidden",
-            }}>
-              {/* Tabs */}
-              <div style={{
-                display: "flex", borderBottom: `1px solid ${BORDER}`,
-                height: 36, flexShrink: 0,
-              }}>
-                {[
-                  { id: "order_book", label: "Signal feed" },
-                  { id: "history", label: "Thesis" },
-                ].map(t => (
-                  <button key={t.id} onClick={() => setFeedTab(t.id as "order_book" | "history")} style={{
-                    flex: 1, background: "transparent", border: "none",
-                    borderBottom: feedTab === t.id ? `2px solid ${B}` : "2px solid transparent",
-                    color: feedTab === t.id ? TEXT : MUTED,
-                    fontSize: 11, fontWeight: feedTab === t.id ? 600 : 400,
-                    padding: "0 0 1px",
-                  }}>{t.label}</button>
-                ))}
-              </div>
-
-              {feedTab === "order_book" ? (
-                <SignalFeed messages={messages} activeAgent={activeAgent} crisis={crisis} />
-              ) : (
-                <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
-                  {thesis ? (
-                    <div style={{ animation: "slideUp 0.3s ease" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                        <div style={{ fontSize: 11, color: MUTED }}>CIO Verdict · {thesis.symbol}</div>
-                        <div style={{
-                          fontSize: 12, fontWeight: 800, color: dirColor,
-                          background: `${dirColor}18`, padding: "2px 8px", borderRadius: 4,
-                        }}>{thesis.direction}</div>
-                      </div>
-                      <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.6, marginBottom: 10 }}>
-                        {thesis.summary}
-                      </div>
-                      <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Catalysts</div>
-                      {thesis.catalysts.slice(0, 2).map((c, i) => (
-                        <div key={i} style={{ fontSize: 11, color: G, marginBottom: 3 }}>↑ {c}</div>
-                      ))}
-                      <div style={{ fontSize: 11, color: MUTED, margin: "8px 0 4px" }}>Risks</div>
-                      {thesis.risks.slice(0, 2).map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: R, marginBottom: 3 }}>↓ {r}</div>
-                      ))}
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                          <span style={{ fontSize: 10, color: MUTED }}>Confidence</span>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: dirColor }}>{thesis.confidence}%</span>
-                        </div>
-                        <div style={{ height: 3, background: BORDER, borderRadius: 2 }}>
-                          <div style={{
-                            height: "100%", borderRadius: 2, background: dirColor,
-                            width: `${thesis.confidence}%`, transition: "width 0.8s ease",
-                          }} />
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ color: MUTED, fontSize: 12, textAlign: "center", marginTop: 40 }}>
-                      Run research to see CIO thesis
-                    </div>
-                  )}
-                </div>
+            {/* Qty control */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 8px", borderBottom:`1px solid ${BRD}`, flexShrink:0 }}>
+              <button style={{ width:20, height:20, background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:14, borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
+              <span style={{ fontSize:12, fontFamily:"monospace" }}>0.01</span>
+              <button style={{ width:20, height:20, background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:14, borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
+            </div>
+            <div style={{ flex:1, overflow:"hidden" }}>
+              {bookTab==="order_book" ? <OrderBook price={lastC}/> : (
+                <div style={{ padding:12, color:DIM, fontSize:11, textAlign:"center", marginTop:20 }}>Trade history coming soon</div>
               )}
             </div>
+          </div>
 
-            {/* ── RIGHT PANEL (Order form) ── */}
-            <div style={{
-              width: 240, flexShrink: 0,
-              borderLeft: `1px solid ${BORDER}`,
-              display: "flex", flexDirection: "column",
-              overflow: "hidden",
-            }}>
-              {/* Available agents */}
-              <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}` }}>
-                <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-                  Available to analyze
+          {/* ── Order Form ──────────────────────────────────────────────────── */}
+          <div style={{ width:224, borderLeft:`1px solid ${BRD}`, display:"flex", flexDirection:"column", flexShrink:0, overflow:"hidden" }}>
+            {/* Available to trade */}
+            <div style={{ padding:"8px 10px", borderBottom:`1px solid ${BRD}`, flexShrink:0 }}>
+              <div style={{ fontSize:11, color:DIM, marginBottom:5 }}>Available to trade</div>
+              {[{lbl:sym},{lbl:"USDC"}].map(r => (
+                <div key={r.lbl} style={{ display:"flex", justifyContent:"space-between", marginBottom:1 }}>
+                  <span style={{ fontSize:12 }}>{r.lbl} <span style={{ color:DIM, fontSize:9 }}>?</span></span>
+                  <span style={{ fontSize:12, fontFamily:"monospace" }}>0</span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 11, color: MUTED }}>Agents</span>
-                  <span style={{ fontSize: 11, fontFamily: "monospace" }}>{agents.length}</span>
+              ))}
+            </div>
+            {/* Buy/Sell tabs */}
+            <div style={{ display:"flex", height:36, borderBottom:`1px solid ${BRD}`, flexShrink:0 }}>
+              {(["buy","sell"] as Side[]).map(s => (
+                <button key={s} onClick={() => setSide(s)} style={{
+                  flex:1, background: side===s ? (s==="buy"?`${G}15`:`${R}15`) : "transparent",
+                  border:"none",
+                  borderBottom: side===s ? `2px solid ${s==="buy"?G:R}` : "2px solid transparent",
+                  color: side===s ? (s==="buy"?G:R) : DIM,
+                  fontSize:13, fontWeight:600, cursor:"pointer", marginBottom:-1, textTransform:"capitalize",
+                }}>{s}</button>
+              ))}
+            </div>
+            {/* Order type tabs */}
+            <div style={{ display:"flex", gap:2, padding:"5px 6px", borderBottom:`1px solid ${BRD}`, flexShrink:0 }}>
+              {(["LIMIT","MARKET","STOP LIMIT"] as OType[]).map(t => (
+                <button key={t} onClick={() => setOType(t)} style={{
+                  flex: t==="STOP LIMIT" ? 1.4:1, padding:"3px 0", borderRadius:3,
+                  background: oType===t ? PN2 : "transparent",
+                  border: `1px solid ${oType===t ? BRD : "transparent"}`,
+                  color: oType===t ? TXT : DIM, fontSize:9.5, fontWeight:600, cursor:"pointer",
+                }}>{t}</button>
+              ))}
+            </div>
+            {/* Form body */}
+            <div style={{ flex:1, overflowY:"auto", padding:"8px 8px" }}>
+              {oType !== "MARKET" && (
+                <div style={{ marginBottom:8 }}>
+                  <div style={{ fontSize:9, color:DIM, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:4 }}>LIMIT PRICE</div>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background:PN3, border:`1px solid ${BRD}`, borderRadius:4, padding:"5px 8px" }}>
+                    <span style={{ fontSize:13, fontFamily:"monospace", fontWeight:600 }}>{lastC.toFixed(2)}</span>
+                    <span style={{ fontSize:11, color:DIM }}>USDC</span>
+                  </div>
+                  <div style={{ display:"flex", gap:3, marginTop:4 }}>
+                    {["MID","BID","1%↓","5%↓"].map(b => (
+                      <button key={b} style={{ flex:1, padding:"3px 0", background:PN2, border:`1px solid ${BRD}`, color:DIM, fontSize:9, borderRadius:3 }}>{b}</button>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
-                  <span style={{ fontSize: 11, color: MUTED }}>Mode</span>
-                  <span style={{ fontSize: 11, fontFamily: "monospace", color: crisis ? R : G }}>
-                    {crisis ? "CRISIS" : "NORMAL"}
-                  </span>
+              )}
+              <div style={{ marginBottom:8 }}>
+                <div style={{ fontSize:9, color:DIM, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:4 }}>AMOUNT</div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background:PN3, border:`1px solid ${BRD}`, borderRadius:4, padding:"5px 8px" }}>
+                  <span style={{ fontSize:13, fontFamily:"monospace" }}>0.00000000</span>
+                  <span style={{ fontSize:11, color:DIM }}>{sym}</span>
+                </div>
+                <div style={{ display:"flex", gap:3, marginTop:4 }}>
+                  {["25%","50%","MAX"].map(b => (
+                    <button key={b} style={{ flex:1, padding:"3px 0", background:PN2, border:`1px solid ${BRD}`, color:DIM, fontSize:10, borderRadius:3 }}>{b}</button>
+                  ))}
                 </div>
               </div>
-
-              {/* Normal / Crisis tabs */}
-              <div style={{ display: "flex", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-                {["Normal", "Crisis"].map(m => (
-                  <button key={m} onClick={() => setCrisis(m === "Crisis")} style={{
-                    flex: 1, height: 36, background: "transparent", border: "none",
-                    borderBottom: (m === "Crisis") === crisis
-                      ? `2px solid ${crisis ? R : G}` : "2px solid transparent",
-                    color: (m === "Crisis") === crisis ? (crisis ? R : G) : MUTED,
-                    fontSize: 12, fontWeight: 600,
-                  }}>{m === "Crisis" ? "⚑ Crisis" : "Normal"}</button>
-                ))}
+              {/* Meta */}
+              <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:`1px solid ${BRD}20`, marginBottom:4 }}>
+                <span style={{ fontSize:11, color:DIM }}>PAY WITH</span>
+                <span style={{ fontSize:11 }}>USDC</span>
               </div>
-
-              {/* Order type tabs (LIMIT / MARKET / STOP) */}
-              <div style={{
-                display: "flex", gap: 4, padding: "8px 10px",
-                borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
-              }}>
-                {["Research", "Quick", "Deep"].map((m, i) => (
-                  <button key={m} style={{
-                    flex: 1, padding: "5px 0", borderRadius: 5,
-                    background: i === 0 ? "#1a2540" : "transparent",
-                    border: `1px solid ${i === 0 ? B : BORDER}`,
-                    color: i === 0 ? B : MUTED,
-                    fontSize: 10, fontWeight: 600,
-                  }}>{m}</button>
-                ))}
-              </div>
-
-              {/* Symbol input (LIMIT PRICE equivalent) */}
-              <div style={{ padding: "10px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-                <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>
-                  Symbol
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <span style={{ fontSize:11, color:DIM }}>EXECUTION</span>
+                <div style={{ position:"relative" }}>
+                  <select style={{ background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:10, padding:"2px 22px 2px 6px", borderRadius:3, cursor:"pointer", outline:"none" }}>
+                    <option>ALLOW TAKER</option><option>MAKER ONLY</option>
+                  </select>
+                  <span style={{ position:"absolute", right:5, top:"50%", transform:"translateY(-50%)", color:DIM, fontSize:8, pointerEvents:"none" }}>▾</span>
                 </div>
-                <div style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  background: "#0a0f1a", border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 10px",
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                <span style={{ fontSize:11, color:DIM }}>TIME IN FORCE</span>
+                <div style={{ position:"relative" }}>
+                  <select style={{ background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:10, padding:"2px 22px 2px 6px", borderRadius:3, cursor:"pointer", outline:"none" }}>
+                    <option>GOOD TIL CANCELED</option><option>FILL OR KILL</option><option>IMMEDIATE OR CANCEL</option>
+                  </select>
+                  <span style={{ position:"absolute", right:5, top:"50%", transform:"translateY(-50%)", color:DIM, fontSize:8, pointerEvents:"none" }}>▾</span>
+                </div>
+              </div>
+              {[["SUBTOTAL","--"],["FEE","--","?"],["TOTAL","--"]].map(([lbl,val,info]) => (
+                <div key={lbl} style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                  <span style={{ fontSize:11, color:DIM }}>{lbl}{info && <span style={{ marginLeft:2 }}>?</span>}</span>
+                  <span style={{ fontSize:11, color:DIM }}>{val}</span>
+                </div>
+              ))}
+              {/* CTA */}
+              <button style={{
+                width:"100%", padding:"11px 0", marginTop:10, borderRadius:8,
+                background: side==="buy"
+                  ? `linear-gradient(135deg,${G},#00966a)`
+                  : `linear-gradient(135deg,${R},#b91c1c)`,
+                border:"none", color:"#000", fontSize:13, fontWeight:800, cursor:"pointer",
+              }}>Add funds to continue</button>
+              <div style={{ fontSize:9, color:DIM, textAlign:"center", marginTop:5 }}>
+                Crypto markets are unique. <span style={{ color:BLU, cursor:"pointer" }}>View more</span>
+              </div>
+
+              {/* ── AI Research panel ── */}
+              <div style={{ marginTop:14, paddingTop:12, borderTop:`1px solid ${BRD}` }}>
+                <div style={{ fontSize:9, color:DIM, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>AI Research</div>
+                <div style={{ display:"flex", gap:3, marginBottom:6 }}>
+                  <input value={inputSym} onChange={e => setInputSym(e.target.value.toUpperCase())}
+                    onKeyDown={e => e.key==="Enter" && runResearch(inputSym)}
+                    placeholder="Symbol" style={{ flex:1, background:PN3, border:`1px solid ${BRD}`, color:TXT, fontSize:12, padding:"4px 6px", borderRadius:4, fontFamily:"monospace" }}/>
+                </div>
+                <div style={{ display:"flex", gap:3, flexWrap:"wrap", marginBottom:6 }}>
+                  {SYMS.map(s => (
+                    <button key={s} onClick={() => { setInputSym(s); setSym(s); }} style={{
+                      padding:"2px 5px", borderRadius:3, fontSize:9, fontWeight:600,
+                      background: sym===s ? PN2 : "transparent",
+                      border: `1px solid ${sym===s ? BLU : BRD}`,
+                      color: sym===s ? BLU : DIM, cursor:"pointer",
+                    }}>{s}</button>
+                  ))}
+                </div>
+                <button onClick={() => runResearch(inputSym)} style={{
+                  width:"100%", padding:"7px 0", borderRadius:6,
+                  background: running ? BRD : (crisis ? `linear-gradient(135deg,${R},#b91c1c)` : BLU),
+                  border:"none", color: running ? DIM : "#fff", fontSize:11, fontWeight:700, cursor:"pointer",
                 }}>
-                  <input
-                    value={inputVal}
-                    onChange={e => setInputVal(e.target.value.toUpperCase())}
-                    onKeyDown={e => e.key === "Enter" && runResearch(inputVal)}
-                    style={{
-                      background: "transparent", border: "none", color: TEXT,
-                      fontSize: 16, fontWeight: 700, width: "100%", fontFamily: "monospace",
-                    }}
-                    placeholder="NVDA"
-                  />
-                  <span style={{ fontSize: 11, color: MUTED }}>USD</span>
-                </div>
-              </div>
-
-              {/* Quick picks (25% / 50% / MAX equivalent) */}
-              <div style={{
-                display: "flex", gap: 4, padding: "8px 10px",
-                borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
-              }}>
-                {WATCHLIST.slice(0, 4).map(sym => (
-                  <button key={sym} onClick={() => { setInputVal(sym); setSymbol(sym); }}
-                    style={{
-                      flex: 1, padding: "4px 0", borderRadius: 4,
-                      background: symbol === sym ? "#1a2540" : "transparent",
-                      border: `1px solid ${symbol === sym ? B : BORDER}`,
-                      color: symbol === sym ? B : MUTED,
-                      fontSize: 9, fontWeight: 600,
-                    }}>{sym}</button>
-                ))}
-              </div>
-
-              {/* MID / BID / % buttons */}
-              <div style={{
-                display: "flex", gap: 4, padding: "6px 10px",
-                borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
-              }}>
-                {WATCHLIST.slice(4).map(sym => (
-                  <button key={sym} onClick={() => { setInputVal(sym); setSymbol(sym); }}
-                    style={{
-                      flex: 1, padding: "4px 0", borderRadius: 4,
-                      background: symbol === sym ? "#1a2540" : "transparent",
-                      border: `1px solid ${symbol === sym ? B : BORDER}`,
-                      color: symbol === sym ? B : MUTED,
-                      fontSize: 9, fontWeight: 600,
-                    }}>{sym}</button>
-                ))}
-              </div>
-
-              {/* Execution / Time in Force rows */}
-              <div style={{ padding: "8px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-                {[
-                  { label: "Execution", value: crisis ? "CRISIS MODE ▾" : "NORMAL MODE ▾" },
-                  { label: "Time in force", value: "ALL AGENTS ▾" },
-                ].map(row => (
-                  <div key={row.label} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
-                    <span style={{ fontSize: 11, color: MUTED }}>{row.label}</span>
-                    <span style={{ fontSize: 11 }}>{row.value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Subtotal */}
-              <div style={{ padding: "8px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-                {[
-                  { label: "Agents running", value: running ? statusMsg || "…" : `${agents.length}` },
-                  { label: "Est. time", value: crisis ? "~60s" : "~30s" },
-                  { label: "Results", value: `${messages.size} / ${agents.length}` },
-                ].map(row => (
-                  <div key={row.label} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-                    <span style={{ fontSize: 11, color: MUTED }}>{row.label}</span>
-                    <span style={{ fontSize: 11, color: TEXT }}>{row.value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* THE CTA BUTTON */}
-              <div style={{ padding: "12px 10px" }}>
-                <button
-                  onClick={() => runResearch(inputVal)}
-                  disabled={!inputVal.trim()}
-                  style={{
-                    width: "100%", padding: "14px 0", borderRadius: 8,
-                    background: running ? BORDER
-                      : crisis ? `linear-gradient(135deg, ${R}, #b91c1c)`
-                      : `linear-gradient(135deg, ${G}, #00966a)`,
-                    border: "none",
-                    color: running ? MUTED : "#000",
-                    fontSize: 14, fontWeight: 800,
-                    letterSpacing: "0.01em",
-                    transition: "all 0.2s",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                  }}
-                >
-                  {running ? (
-                    <>
-                      <span style={{ animation: "pulse 0.8s infinite" }}>●</span>
-                      Stop research
-                    </>
-                  ) : (
-                    `${crisis ? "⚑ Crisis" : "Run"} Research →`
-                  )}
+                  {running ? `⟳ ${statusMsg||"Running..."}` : crisis ? "⚠ Crisis Research →" : "Run Research →"}
                 </button>
-                <div style={{ fontSize: 9, color: MUTED, textAlign: "center", marginTop: 6 }}>
-                  AI research pipelines are non-deterministic.{" "}
-                  <span style={{ color: B, cursor: "pointer" }}>Learn more</span>
-                </div>
+                {thesis && (
+                  <div style={{ marginTop:10, padding:8, background:PN2, borderRadius:6, animation:"slideUp 0.3s ease" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                      <span style={{ fontSize:10, color:DIM }}>CIO Verdict · {thesis.symbol}</span>
+                      <span style={{ fontSize:11, fontWeight:800, color:dirColor, background:`${dirColor}18`, padding:"1px 6px", borderRadius:3 }}>{thesis.direction}</span>
+                    </div>
+                    <div style={{ fontSize:10, color:"#94a3b8", lineHeight:1.5 }}>{thesis.summary?.slice(0,120)}...</div>
+                    <div style={{ marginTop:6 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:2 }}>
+                        <span style={{ fontSize:9, color:DIM }}>Confidence</span>
+                        <span style={{ fontSize:9, color:dirColor, fontWeight:700 }}>{thesis.confidence}%</span>
+                      </div>
+                      <div style={{ height:3, background:BRD, borderRadius:2 }}>
+                        <div style={{ height:"100%", background:dirColor, width:`${thesis.confidence}%`, borderRadius:2, transition:"width 0.8s ease" }}/>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
+
+        {/* ══ BOTTOM ORDERS TABLE ══════════════════════════════════════════════ */}
+        <div style={{ borderTop:`1px solid ${BRD}`, background:PNL, flexShrink:0, maxHeight:170, overflowY:"auto" }}>
+          <div style={{ display:"flex", alignItems:"center", padding:"5px 10px", gap:8, borderBottom:`1px solid ${BRD}`, position:"sticky", top:0, background:PNL, zIndex:2 }}>
+            <span style={{ fontSize:12, fontWeight:600 }}>Orders</span>
+            <span style={{ fontSize:9, color:DIM }}>?</span>
+            <div style={{ flex:1 }}/>
+            <span style={{ fontSize:11, color:R, cursor:"pointer" }}>Cancel all</span>
+            <span style={{ fontSize:11, color:BLU, cursor:"pointer" }}>View all</span>
+            {["ALL MARKETS ▼","ALL STATUSES ▼","⌄"].map(b => (
+              <button key={b} style={{ padding:"2px 8px", background:PN2, border:`1px solid ${BRD}`, color:TXT, fontSize:10, borderRadius:4 }}>{b}</button>
+            ))}
+          </div>
+          {messages.size > 0 ? (
+            <>
+              <div style={{ display:"grid", gridTemplateColumns:"90px 80px 55px 50px 1fr 70px 70px", padding:"3px 10px", borderBottom:`1px solid ${BRD}`, gap:6 }}>
+                {["TIME PLACED","NAME","TYPE","SIDE","PRICE","AMOUNT","STATUS"].map(h => (
+                  <div key={h} style={{ fontSize:8.5, color:DIM, textTransform:"uppercase" }}>{h}</div>
+                ))}
+              </div>
+              {Array.from(messages.values()).map((msg: any) => (
+                <div key={msg.role} style={{ display:"grid", gridTemplateColumns:"90px 80px 55px 50px 1fr 70px 70px", padding:"5px 10px", gap:6, alignItems:"center", borderBottom:`1px solid ${BRD}15`, animation:"slideUp 0.2s ease" }}>
+                  <div style={{ fontSize:10, color:DIM }}>{new Date().toLocaleTimeString()}</div>
+                  <div style={{ fontSize:11, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{msg.role.replace(/_/g," ")}</div>
+                  <div style={{ fontSize:10, color:DIM }}>LIMIT</div>
+                  <div style={{ fontSize:10, fontWeight:700, color: msg.stance==="bullish"?G:R }}>{msg.stance==="bullish"?"BUY":"SELL"}</div>
+                  <div style={{ fontSize:10, fontFamily:"monospace" }}>{lastC.toFixed(2)}</div>
+                  <div style={{ fontSize:10, fontFamily:"monospace" }}>{((msg.confidence??50)/10000).toFixed(6)}</div>
+                  <div style={{ fontSize:9, color:G, background:`${G}15`, padding:"2px 5px", borderRadius:3, textAlign:"center" }}>Filled</div>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"18px 0", color:DIM }}>
+              <div style={{ fontSize:28, marginBottom:6 }}>⊟</div>
+              <div style={{ fontSize:12 }}>No orders</div>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* ══ MODALS ══════════════════════════════════════════════════════════════ */}
+      {modal==="chart_settings" && <ChartSettingsModal onClose={() => setModal("none")}/>}
+      {modal==="go_to" && <GoToModal onClose={() => setModal("none")}/>}
     </>
   );
 }
