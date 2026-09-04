@@ -3,11 +3,20 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+type Role = "dev" | "judge";
+
+const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
+  { value: "judge", label: "Judge", hint: "Password is JUDGE for judges" },
+  { value: "dev", label: "Dev", hint: "Password is DEV for developers" },
+];
+
 export default function LoginPage() {
   const router = useRouter();
+  const [role, setRole] = useState<Role>("judge");
   const [passphrase, setPassphrase] = useState("");
   const [status, setStatus] = useState<"idle" | "submitting" | "error">("idle");
   const [error, setError] = useState("");
+  const hint = ROLE_OPTIONS.find((r) => r.value === role)?.hint ?? "";
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -18,7 +27,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passphrase }),
+        body: JSON.stringify({ role, passphrase }),
       });
       if (res.ok) {
         router.push("/home/research");
@@ -48,6 +57,28 @@ export default function LoginPage() {
           </div>
           <div className="space-y-4 px-6 py-6">
             <div>
+              <span className="eyebrow">Account</span>
+              <div className="mt-2 grid grid-cols-2 gap-1 rounded-xl border border-[var(--trading-border)] bg-[var(--trading-panel-deep)] p-1">
+                {ROLE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      setRole(option.value);
+                      setStatus("idle");
+                    }}
+                    className={`h-9 rounded-lg text-sm font-semibold transition-colors ${
+                      role === option.value
+                        ? "bg-[#2962ff] text-white"
+                        : "text-[var(--trading-muted)] hover:text-[var(--trading-text)]"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
               <label htmlFor="passphrase" className="eyebrow">Passphrase</label>
               <input
                 id="passphrase"
@@ -73,9 +104,7 @@ export default function LoginPage() {
           </div>
         </form>
         <p className="mt-5 text-center text-[11px] leading-relaxed text-[var(--trading-muted)]">
-          Judging demo: use the passphrase provided by the team.
-          <br />
-          Live-money trading is disabled — paper only.
+          {hint}
         </p>
       </div>
     </main>

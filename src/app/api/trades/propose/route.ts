@@ -1,4 +1,5 @@
 import { TradeProposalRequestSchema } from "@/lib/contracts/trade";
+import { accountRoleFromRequest } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,7 @@ export async function POST(request: Request): Promise<Response> {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        "X-Account-Role": accountRoleFromRequest(request),
         ...(process.env.BACKEND_API_KEY
           ? { "X-API-Key": process.env.BACKEND_API_KEY }
           : {}),

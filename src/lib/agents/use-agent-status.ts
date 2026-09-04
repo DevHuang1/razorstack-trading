@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { AgentRole } from "@/lib/contracts/research";
 import type { MascotState } from "@/components/AgentMascot";
+import { ROLE_COOKIE } from "@/lib/auth";
 
 export interface AgentStatusUpdate {
   agent_id: string;
@@ -48,10 +49,22 @@ interface AgentStatusState {
 }
 
 function websocketUrl(): string {
-  if (process.env.NEXT_PUBLIC_BACKEND_WS_URL) return process.env.NEXT_PUBLIC_BACKEND_WS_URL;
-  if (typeof window === "undefined") return "ws://127.0.0.1:8000/events/ws";
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.hostname}:8000/events/ws`;
+  const base =
+    process.env.NEXT_PUBLIC_BACKEND_WS_URL ??
+    (typeof window === "undefined"
+      ? "ws://127.0.0.1:8000/events/ws"
+      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.hostname}:8000/events/ws`);
+  const role =
+    typeof window === "undefined"
+      ? "dev"
+      : decodeURIComponent(
+          document.cookie
+            .split(";")
+            .map((c) => c.trim())
+            .find((c) => c.startsWith(`${ROLE_COOKIE}=`))?.slice(ROLE_COOKIE.length + 1) ?? "dev",
+        );
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}role=${encodeURIComponent(role)}`;
 }
 
 export function useAgentStatusStream(enabled = true): AgentStatusState {

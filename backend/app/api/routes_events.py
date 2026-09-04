@@ -31,12 +31,18 @@ async def recent_events(
 async def events_ws(websocket: WebSocket):
     """Stream every published event as JSON; one line per event.
 
-    A periodic heartbeat detects clients that vanished without sending a close
-    frame: the ``send_text`` fails, the loop exits, and the subscriber queue is
-    removed from the bus (otherwise it would leak and never receive events).
+    The account role is selected by the ``role`` query parameter (``dev`` |
+    ``judge``; default ``dev``) since WebSockets cannot carry the custom role
+    header. A periodic heartbeat detects clients that vanished without sending a
+    close frame: the ``send_text`` fails, the loop exits, and the subscriber
+    queue is removed from the bus (otherwise it would leak and never receive
+    events).
     """
     await websocket.accept()
-    bus: EventBus = websocket.app.state.bus
+    role = websocket.query_params.get("role", "dev").strip().lower()
+    if role not in ("dev", "judge"):
+        role = "dev"
+    bus: EventBus = websocket.app.state.stacks[role]["bus"]
     queue = bus.subscribe()
     HEARTBEAT_SECONDS = 30.0
     try:

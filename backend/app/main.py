@@ -30,9 +30,10 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.logging import setup_logging
 from app.db.base import Base
-from app.db.session import make_engine, make_sessionmaker
+from app.db.session import make_engine_for_url, make_sessionmaker
 from app.events.manager import EventBus
-from app.integrations.base import BrokerError
+from app.integrations.base import BrokerError, BrokerService
+from app.integrations.mock_alpaca import MockAlpacaService
 from app.services.order_manager import OrderManager
 from app.services.portfolio import PortfolioService
 from app.services.risk import RiskEngine
@@ -50,14 +51,18 @@ def _error(status_code: int, code: str, message: str, details=None) -> JSONRespo
 
 async def _tick_loop(app: FastAPI) -> None:
     """Mock-broker heartbeat: advance prices, fill crossed limits, emit events."""
-    broker = app.state.broker
-    interval = float(app.state.settings.mock_price_tick_seconds)
+    settings = app.state.settings
+    interval = float(settings.mock_price_tick_seconds)
     while True:
         await asyncio.sleep(interval)
         try:
-            filled_ids = await broker.tick()
-            if filled_ids:
-                await routes_admin.apply_tick_results(app, filled_ids)
+            for stack in app.state.stacks.values():
+                broker = stack["broker"]
+                if not isinstance(broker, MockAlpacaService):
+                    continue
+                filled_ids = await broker.tick()
+                if filled_ids:
+                    await routes_admin.apply_tick_results_app(app, filled_ids)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -70,16 +75,18 @@ async def _reconcile_loop(app: FastAPI) -> None:
     The mock broker fills synchronously inside ``tick()``; the real Alpaca broker
     fills asynchronously, so without this loop local order state would never be
     reconciled (orders would stay SUBMITTED forever) and the event stream would
-    miss ORDER_FILLED events.
+    miss ORDER_FILLED events. Each role's stack reconciles its own orders.
     """
-    orders = app.state.orders
-    interval = float(app.state.settings.order_poll_seconds)
+    settings = app.state.settings
+    interval = float(settings.order_poll_seconds)
     while True:
         await asyncio.sleep(interval)
         try:
-            filled = await orders.reconcile_open_orders()
-            if filled:
-                await routes_admin.publish_fills(app, filled)
+            for stack in app.state.stacks.values():
+                orders = stack["orders"]
+                filled = await orders.reconcile_open_orders()
+                if filled:
+                    await routes_admin.publish_fills_app(app, filled)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -88,12 +95,14 @@ async def _reconcile_loop(app: FastAPI) -> None:
 
 async def _maintenance_loop(app: FastAPI) -> None:
     """Periodically prune old events / snapshots so tables don't grow unbounded."""
-    interval = float(app.state.settings.maintenance_interval_seconds)
+    settings = app.state.settings
+    interval = float(settings.maintenance_interval_seconds)
     while True:
         await asyncio.sleep(interval)
         try:
-            await app.state.bus.prune(app.state.settings.event_retention_days)
-            await app.state.portfolio.prune_snapshots(app.state.settings.snapshot_retention_days)
+            for stack in app.state.stacks.values():
+                await stack["bus"].prune(settings.event_retention_days)
+                await stack["portfolio"].prune_snapshots(settings.snapshot_retention_days)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -104,44 +113,49 @@ async def _maintenance_loop(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
     if settings.auto_create_db:
-        async with app.state.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        for stack in app.state.stacks.values():
+            async with stack["engine"].begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
         logger.info("database schema ensured", extra={"auto_create_db": True})
 
-    task = None
+    tasks: list[asyncio.Task] = []
     if settings.broker_mode == "mock":
-        task = asyncio.create_task(_tick_loop(app))
+        tasks.append(asyncio.create_task(_tick_loop(app)))
     else:
-        task = asyncio.create_task(_reconcile_loop(app))
-    maintenance = asyncio.create_task(_maintenance_loop(app))
+        tasks.append(asyncio.create_task(_reconcile_loop(app)))
+    tasks.append(asyncio.create_task(_maintenance_loop(app)))
     try:
         # Rehydrate the in-memory event buffer so /events/recent matches history.
-        await app.state.bus.replay()
+        for stack in app.state.stacks.values():
+            await stack["bus"].replay()
         yield
     finally:
-        for t in (task, maintenance):
+        for t in tasks:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
-        await app.state.engine.dispose()
+        for stack in app.state.stacks.values():
+            await stack["engine"].dispose()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings or Settings()
-    setup_logging(settings.log_level)
-
-    if settings.broker_mode == "alpaca" and not settings.alpaca_paper:
-        raise ValueError("Live trading is disabled; ALPACA_PAPER must remain true")
-
-    engine = make_engine(settings)
+def _build_stack(
+    *,
+    settings: Settings,
+    role: str,
+    api_key: str,
+    secret_key: str,
+    database_url: str,
+) -> dict:
+    """Construct one fully-isolated role stack (broker + analytics + bus)."""
+    engine = make_engine_for_url(database_url)
     session_factory = make_sessionmaker(engine)
 
     if settings.broker_mode == "alpaca":
         from app.integrations.alpaca import AlpacaService
 
-        broker = AlpacaService(
-            api_key=settings.alpaca_api_key,
-            secret_key=settings.alpaca_secret_key,
+        broker: BrokerService = AlpacaService(
+            api_key=api_key,
+            secret_key=secret_key,
             paper=settings.alpaca_paper,
             client_id=settings.alpaca_client_id,
             client_secret=settings.alpaca_client_secret,
@@ -153,9 +167,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     else:
         from app.integrations.mock_alpaca import MockAlpacaService
 
-        broker = MockAlpacaService(
+        persist_path: str | None = None
+        if settings.mock_state_path:
+            stem, sep, ext = settings.mock_state_path.rpartition(".")
+            persist_path = f"{stem}.{role}{sep}{ext}" if sep else f"{settings.mock_state_path}.{role}"
+        broker: BrokerService = MockAlpacaService(
             initial_cash=settings.mock_initial_cash,
-            persist_path=settings.mock_state_path or None,
+            persist_path=persist_path,
         )
 
     portfolio = PortfolioService(broker, session_factory, settings)
@@ -164,6 +182,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bus = EventBus(session_factory)
     trading = TradingService(session_factory, portfolio, risk, orders, bus)
 
+    return {
+        "engine": engine,
+        "session_factory": session_factory,
+        "broker": broker,
+        "portfolio": portfolio,
+        "risk": risk,
+        "orders": orders,
+        "bus": bus,
+        "trading": trading,
+    }
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings()
+    setup_logging(settings.log_level)
+
+    if settings.broker_mode == "alpaca" and not settings.alpaca_paper:
+        raise ValueError("Live trading is disabled; ALPACA_PAPER must remain true")
+
+    # Two independent stacks: dev (default account, its own DB) and judge
+    # (second paper account, its own DB when judge_database_url is set).
+    judge_url = settings.judge_database_url or settings.database_url
+    stacks = {
+        "dev": _build_stack(
+            settings=settings,
+            role="dev",
+            api_key=settings.alpaca_api_key,
+            secret_key=settings.alpaca_secret_key,
+            database_url=settings.database_url,
+        ),
+        "judge": _build_stack(
+            settings=settings,
+            role="judge",
+            api_key=settings.alpaca_judge_api_key or settings.alpaca_api_key,
+            secret_key=settings.alpaca_judge_secret_key or settings.alpaca_secret_key,
+            database_url=judge_url,
+        ),
+    }
+
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",
@@ -171,14 +228,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         debug=settings.debug,
     )
     app.state.settings = settings
-    app.state.engine = engine
-    app.state.session_factory = session_factory
-    app.state.broker = broker
-    app.state.portfolio = portfolio
-    app.state.risk = risk
-    app.state.orders = orders
-    app.state.bus = bus
-    app.state.trading = trading
+    app.state.stacks = stacks
+    # Convenience aliases to the dev stack (keeps legacy references working).
+    app.state.engine = stacks["dev"]["engine"]
+    app.state.session_factory = stacks["dev"]["session_factory"]
+    app.state.broker = stacks["dev"]["broker"]
+    app.state.portfolio = stacks["dev"]["portfolio"]
+    app.state.risk = stacks["dev"]["risk"]
+    app.state.orders = stacks["dev"]["orders"]
+    app.state.bus = stacks["dev"]["bus"]
+    app.state.trading = stacks["dev"]["trading"]
 
     origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     if origins:

@@ -53,7 +53,7 @@ describe("useAgentStatusStream", () => {
   it("maps AGENT_STATUS events to mascot states and keeps connection state", async () => {
     const { result } = renderHook(() => useAgentStatusStream());
     const socket = MockWebSocket.instances[0];
-    expect(socket.url).toMatch(/:8000\/events\/ws$/);
+    expect(socket.url).toMatch(/:8000\/events\/ws\?role=dev$/);
 
     socket.emitOpen();
     await waitFor(() => expect(result.current.connected).toBe(true));

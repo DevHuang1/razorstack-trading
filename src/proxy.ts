@@ -9,15 +9,15 @@ export const config = {
 export async function proxy(request: NextRequest) {
   const url = request.nextUrl;
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  const authed = await verifySessionToken(process.env.AUTH_SESSION_SECRET ?? "", token);
+  const role = await verifySessionToken(process.env.AUTH_SESSION_SECRET ?? "", token);
   const isLoginPage = url.pathname === "/login";
 
-  if (authed && isLoginPage) {
+  if (role && isLoginPage) {
     url.pathname = "/home/research";
     return NextResponse.redirect(url);
   }
 
-  if (!authed && !isLoginPage) {
+  if (!role && !isLoginPage) {
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }

@@ -1,6 +1,14 @@
 export const SESSION_COOKIE = "razorstack_session";
+// Readable (non-httpOnly) mirror of the session role for client components.
+export const ROLE_COOKIE = "razorstack_role";
 
-const SESSION_ROLE = "judge";
+export const ROLES = ["dev", "judge"] as const;
+export type Role = (typeof ROLES)[number];
+
+export function isRole(value: unknown): value is Role {
+  return typeof value === "string" && (ROLES as readonly string[]).includes(value);
+}
+
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 function enc(data: string): Uint8Array<ArrayBuffer> {
@@ -26,20 +34,41 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function createSessionToken(secret: string): Promise<string> {
+export async function createSessionToken(secret: string, role: Role): Promise<string> {
   if (!secret) throw new Error("AUTH_SESSION_SECRET is not configured");
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
-  const sig = await hmacHex(secret, `${SESSION_ROLE}.${exp}`);
-  return `${SESSION_ROLE}.${exp}.${sig}`;
+  const sig = await hmacHex(secret, `${role}.${exp}`);
+  return `${role}.${exp}.${sig}`;
 }
 
-export async function verifySessionToken(secret: string, token?: string | null): Promise<boolean> {
-  if (!secret || !token) return false;
+export async function verifySessionToken(
+  secret: string,
+  token?: string | null,
+): Promise<Role | null> {
+  if (!secret || !token) return null;
   const [role, expStr, sig] = token.split(".");
-  if (role !== SESSION_ROLE || !expStr || !sig) return false;
+  if (!isRole(role) || !expStr || !sig) return null;
   const exp = Number(expStr);
-  if (!Number.isSafeInteger(exp) || exp <= 0) return false;
+  if (!Number.isSafeInteger(exp) || exp <= 0) return null;
   const expected = await hmacHex(secret, `${role}.${expStr}`);
-  if (!timingSafeEqual(expected, sig)) return false;
-  return exp > Math.floor(Date.now() / 1000);
+  if (!timingSafeEqual(expected, sig)) return null;
+  return exp > Math.floor(Date.now() / 1000) ? role : null;
+}
+
+export function roleFromToken(token?: string | null): Role {
+  if (!token) return "dev";
+  return isRole(token.split(".")[0]) ? (token.split(".")[0] as Role) : "dev";
+}
+
+export function cookieValue(cookies: string, name: string): string | null {
+  const match = cookies
+    .split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+
+export function accountRoleFromRequest(request: Request): Role {
+  const cookies = request.headers.get("cookie") ?? "";
+  return roleFromToken(cookieValue(cookies, SESSION_COOKIE));
 }

@@ -1,17 +1,26 @@
 import { NextResponse } from "next/server";
-import { createSessionToken, SESSION_COOKIE } from "@/lib/auth";
+import {
+  createSessionToken,
+  isRole,
+  type Role,
+  ROLE_COOKIE,
+  SESSION_COOKIE,
+} from "@/lib/auth";
 
 export async function POST(req: Request) {
-  const passphrase = process.env.PASSPHRASE;
-  if (!passphrase) {
-    return NextResponse.json({ ok: false, error: "Login not configured" }, { status: 503 });
-  }
-
-  let body: { passphrase?: unknown };
+  let body: { passphrase?: unknown; role?: unknown };
   try {
-    body = (await req.json()) as { passphrase?: unknown };
+    body = (await req.json()) as { passphrase?: unknown; role?: unknown };
   } catch {
     body = {};
+  }
+
+  const role: Role = isRole(body.role) ? body.role : "judge";
+  // Dev accounts use DEV_PASSPHRASE; judges use PASSPHRASE.
+  const passphrase =
+    role === "dev" ? process.env.DEV_PASSPHRASE : process.env.PASSPHRASE;
+  if (!passphrase) {
+    return NextResponse.json({ ok: false, error: "Login not configured" }, { status: 503 });
   }
 
   const submitted = typeof body.passphrase === "string" ? body.passphrase : "";
@@ -27,16 +36,27 @@ export async function POST(req: Request) {
 
   let token: string;
   try {
-    token = await createSessionToken(process.env.AUTH_SESSION_SECRET ?? "");
+    token = await createSessionToken(process.env.AUTH_SESSION_SECRET ?? "", role);
   } catch {
     return NextResponse.json({ ok: false, error: "Login not configured" }, { status: 503 });
   }
 
-  const res = NextResponse.json({ ok: true });
+  const res = NextResponse.json({ ok: true, role });
   res.cookies.set({
     name: SESSION_COOKIE,
     value: token,
     httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  });
+  // Readable mirror so client-side code (e.g. the agent-status WebSocket) can
+  // pick the right account stream without exposing the signed session token.
+  res.cookies.set({
+    name: ROLE_COOKIE,
+    value: role,
+    httpOnly: false,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",

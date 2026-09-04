@@ -15,7 +15,15 @@ def _normalize_url(url: str) -> str:
 
 
 def make_engine(settings: Settings):
-    url = _normalize_url(settings.database_url)
+    return _make_engine(settings.database_url)
+
+
+def make_engine_for_url(url: str):
+    return _make_engine(url)
+
+
+def _make_engine(url: str):
+    url = _normalize_url(url)
     kwargs: dict = {"echo": False}
     if url.startswith("sqlite"):
         from sqlalchemy.pool import StaticPool

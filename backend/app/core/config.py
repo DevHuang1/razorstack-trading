@@ -51,12 +51,22 @@ class Settings(BaseSettings):
 
     # --- Database ---
     database_url: str = "sqlite+aiosqlite:///./trading_dev.db"
+    # Judge account's own database. When empty, the judge stack shares the dev
+    # database_url (used for single-DB local dev / tests). On Railway this is a
+    # separate Postgres database to fully isolate dev and judge data.
+    judge_database_url: str = ""
     auto_create_db: bool = True
 
     # --- Broker ---
     broker_mode: str = "mock"  # "mock" | "alpaca"
+    # Roles (dev / judge) resolve to two independent broker credentials.
+    # Dev is the default account; judge is the second paper account used by
+    # judges. Frontend requests pick the account via the `X-Account-Role`
+    # header ("dev" | "judge").
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
+    alpaca_judge_api_key: str = ""
+    alpaca_judge_secret_key: str = ""
     alpaca_paper: bool = True
     # OAuth2 client-credentials ("API Keys" 2024) — alternative to key/secret
     alpaca_client_id: str = ""

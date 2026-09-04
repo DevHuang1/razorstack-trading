@@ -9,7 +9,11 @@ from sqlalchemy import delete
 from app.core.auth import require_api_key
 from app.core.errors import ConflictError, NotFoundError
 from app.events.manager import EventBus
-from app.integrations.base import InvalidOrderError, OrderNotFoundError
+from app.integrations.base import (
+    InvalidOrderError,
+    OrderNotFoundError,
+    TERMINAL_ORDER_STATUSES,
+)
 from app.integrations.mock_alpaca import MockAlpacaService
 from app.models.event import EventModel
 from app.models.order import OrderModel
@@ -32,18 +36,32 @@ _LOCAL_TABLES = (
 )
 
 
+def _stack(request: Request) -> dict:
+    from app.api.deps import get_role
+
+    return request.app.state.stacks[get_role(request)]
+
+
 def _mock_broker(request: Request) -> MockAlpacaService:
-    broker = request.app.state.broker
+    broker = _stack(request)["broker"]
     if not isinstance(broker, MockAlpacaService):
         raise ConflictError("admin simulation endpoints require BROKER_MODE=mock")
     return broker
 
 
-async def publish_fills(app: FastAPI, fills: list[OrderResult]) -> list[dict]:
+async def publish_fills_app(app: FastAPI, fills: list[OrderResult]) -> list[dict]:
+    """Role-aware wrapper: publish fills for every role's stack."""
+    published: list[dict] = []
+    for stack in app.state.stacks.values():
+        published.extend(await publish_fills_stack(stack, fills))
+    return published
+
+
+async def publish_fills_stack(stack: dict, fills: list[OrderResult]) -> list[dict]:
     """Emit ORDER_FILLED for each freshly-filled order and refresh analytics."""
     if not fills:
         return []
-    bus: EventBus = app.state.bus
+    bus: EventBus = stack["bus"]
 
     published: list[dict] = []
     for f in fills:
@@ -59,7 +77,7 @@ async def publish_fills(app: FastAPI, fills: list[OrderResult]) -> list[dict]:
         await bus.publish(EventType.ORDER_FILLED.value, payload)
         published.append(payload)
 
-    portfolio = app.state.portfolio
+    portfolio = stack["portfolio"]
     snapshot = await portfolio.persist_current()
     await bus.publish(
         EventType.POSITION_UPDATED.value,
@@ -68,39 +86,48 @@ async def publish_fills(app: FastAPI, fills: list[OrderResult]) -> list[dict]:
     return published
 
 
-async def apply_tick_results(app: FastAPI, filled_ids: list[str]) -> list[dict]:
-    """Reconcile locally-stored orders, then publish fills + refresh analytics."""
+async def apply_tick_results_app(app: FastAPI, filled_ids: list[str]) -> list[dict]:
+    """Role-aware wrapper: reconcile + publish fills for every role's stack."""
     if not filled_ids:
         return []
-    orders = app.state.orders
+    published: list[dict] = []
+    for stack in app.state.stacks.values():
+        results = await _reconcile_filled(stack, filled_ids)
+        published.extend(await publish_fills_stack(stack, results))
+    return published
 
+
+async def _reconcile_filled(stack: dict, filled_ids: list[str]) -> list[OrderResult]:
+    orders = stack["orders"]
     results: list[OrderResult] = []
     for order_id in filled_ids:
-        row = await orders.refresh_by_broker_id(order_id)
-        if row is not None:
-            results.append(row)
-    return await publish_fills(app, results)
+        result = await orders.refresh_by_broker_id(order_id)
+        if result and result.status in TERMINAL_ORDER_STATUSES:
+            results.append(result)
+    return results
 
 
 @router.post("/reset")
 async def reset_state(request: Request):
     """Wipe broker state AND every local table; back to a fresh demo."""
+    stack = _stack(request)
     broker = _mock_broker(request)
     broker.reset()
-    async with request.app.state.session_factory() as session:
+    async with stack["session_factory"]() as session:
         for model in _LOCAL_TABLES:
             await session.execute(delete(model))
         await session.commit()
-    request.app.state.bus.clear()
+    stack["bus"].clear()
     return {"status": "ok", "action": "reset", "broker_mode": request.app.state.settings.broker_mode}
 
 
 @router.post("/tick")
 async def force_tick(request: Request):
     """Advance mock prices once and fill any crossed limit orders."""
+    stack = _stack(request)
     broker = _mock_broker(request)
     filled_ids = await broker.tick()
-    published = await apply_tick_results(request.app, filled_ids)
+    published = await publish_fills_stack(stack, await _reconcile_filled(stack, filled_ids))
     return {"status": "ok", "filled_order_ids": [p["order_id"] for p in published], "fills": published}
 
 
@@ -112,10 +139,11 @@ async def fill_order_now(order_id: str, request: Request):
     """
     from sqlalchemy import select
 
+    stack = _stack(request)
     broker = _mock_broker(request)
 
     # Resolve local UUID -> broker order id; fall back to direct key.
-    async with request.app.state.session_factory() as session:
+    async with stack["session_factory"]() as session:
         row = (
             await session.execute(
                 select(OrderModel).where(OrderModel.id == order_id)
@@ -129,5 +157,5 @@ async def fill_order_now(order_id: str, request: Request):
         raise NotFoundError(str(exc))
     except InvalidOrderError as exc:
         raise ConflictError(str(exc))
-    published = await apply_tick_results(request.app, [broker_order_id])
+    published = await publish_fills_stack(stack, await _reconcile_filled(stack, [broker_order_id]))
     return {"status": "ok", "fills": published}
