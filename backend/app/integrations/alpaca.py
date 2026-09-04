@@ -58,6 +58,30 @@ def _enum_value(value) -> str:
     return text.split(".")[-1].lower()
 
 
+# --- crypto symbol helpers ---------------------------------------------------
+# Alpaca splits its feed by asset class: equities use the stock data client,
+# crypto uses the crypto client with "BASE/USD" pair notation. The terminal
+# speaks bare symbols (BTC, ETH, SOL...), so normalize before hitting either.
+_CRYPTO_BASES = frozenset({
+    "BTC", "ETH", "SOL", "LTC", "BCH", "XRP", "DOGE", "SHIB",
+    "AVAX", "LINK", "DOT", "MATIC", "AAVE", "UNI", "ADA", "TRX",
+})
+
+
+def _is_crypto_symbol(symbol: str) -> bool:
+    """True for crypto assets, either bare (BTC) or USD-quoted (BTCUSD)."""
+    s = symbol.upper()
+    return s in _CRYPTO_BASES or (s.endswith("USD") and s[:-3] in _CRYPTO_BASES)
+
+
+def _crypto_pair(symbol: str) -> str:
+    """Normalize BTC / BTCUSD to the BTC/USD pair the crypto feed uses."""
+    s = symbol.upper()
+    if s in _CRYPTO_BASES:
+        return f"{s}/USD"
+    return f"{s[:-3]}/USD"
+
+
 class AlpacaService(BrokerService):
     def __init__(
         self,
@@ -96,7 +120,7 @@ class AlpacaService(BrokerService):
                 "ALPACA_CLIENT_ID/ALPACA_CLIENT_SECRET when BROKER_MODE=alpaca"
             )
         try:
-            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
             from alpaca.trading.client import TradingClient
         except ImportError as exc:  # pragma: no cover - depends on env
             raise BrokerError("alpaca-py is not installed; run pip install alpaca-py") from exc
@@ -123,6 +147,12 @@ class AlpacaService(BrokerService):
             secret_key=None if use_token else secret_key,
             oauth_token=oauth_token or None,
             url_override=url_override,
+        )
+        # Crypto data lives on a separate client (separate feed, BASE/USD pairs).
+        self._crypto_data = CryptoHistoricalDataClient(
+            api_key=None if use_token else api_key,
+            secret_key=None if use_token else secret_key,
+            oauth_token=oauth_token or None,
         )
 
     # --------------------------------------------------------------- oauth
@@ -277,22 +307,27 @@ class AlpacaService(BrokerService):
         from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
         alpaca_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        # Route crypto (BTC, ETH, BTCUSD, ...) to the BASE/USD pair the crypto
+        # book trades; otherwise a bare "BTC" order would hit the equity ticker.
+        is_crypto = _is_crypto_symbol(symbol)
+        target = _crypto_pair(symbol) if is_crypto else symbol.upper()
+        time_in_force = TimeInForce.GTC if is_crypto else TimeInForce.DAY
         try:
             if order_type == "market":
                 request = MarketOrderRequest(
-                    symbol=symbol.upper(),
+                    symbol=target,
                     qty=int(quantity),
                     side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=time_in_force,
                 )
             elif order_type == "limit":
                 if limit_price is None or limit_price <= 0:
                     raise InvalidOrderError("limit orders require a positive limit_price")
                 request = LimitOrderRequest(
-                    symbol=symbol.upper(),
+                    symbol=target,
                     qty=int(quantity),
                     side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=time_in_force,
                     limit_price=float(limit_price),
                 )
             else:
@@ -356,13 +391,21 @@ class AlpacaService(BrokerService):
 
     # ------------------------------------------------------------- market data
     async def get_market_data(self, symbol: str) -> MarketTick:
-        from alpaca.data.requests import StockLatestTradeRequest
-
         target = symbol.upper()
         try:
-            request = StockLatestTradeRequest(symbol_or_symbols=target)
-            trades = await self._call(self._data.get_stock_latest_trade, request)
-            trade = trades[target]
+            if _is_crypto_symbol(target):
+                from alpaca.data.requests import CryptoLatestTradeRequest
+
+                pair = _crypto_pair(target)
+                request = CryptoLatestTradeRequest(symbol_or_symbols=pair)
+                trades = await self._call(self._crypto_data.get_crypto_latest_trade, request)
+                trade = trades[pair]
+            else:
+                from alpaca.data.requests import StockLatestTradeRequest
+
+                request = StockLatestTradeRequest(symbol_or_symbols=target)
+                trades = await self._call(self._data.get_stock_latest_trade, request)
+                trade = trades[target]
         except Exception as exc:
             raise BrokerError(f"alpaca get_market_data failed: {exc}") from exc
         return MarketTick(

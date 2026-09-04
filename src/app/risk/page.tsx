@@ -140,9 +140,9 @@ export default function RiskPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    const t = setTimeout(load, 0);
     const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
+    return () => { clearTimeout(t); clearInterval(id); };
   }, [load]);
 
   const m = risk?.metrics;

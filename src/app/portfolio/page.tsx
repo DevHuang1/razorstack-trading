@@ -47,16 +47,6 @@ function Sign({ value }: { value: number }) {
   );
 }
 
-function Pct({ value }: { value: number }) {
-  const cls = value >= 0 ? "text-emerald-400" : "text-red-400";
-  return (
-    <span className={cls}>
-      {value >= 0 ? "+" : ""}
-      {fmt(value * 100)}%
-    </span>
-  );
-}
-
 const SECTOR_COLORS: Record<string, string> = {
   technology: "bg-violet-500",
   financials: "bg-cyan-500",
@@ -79,6 +69,32 @@ function SectorBar({ name, pct }: { name: string; pct: number }) {
       </div>
       <span className="w-10 text-right text-xs text-zinc-300">{fmt(pct * 100)}%</span>
     </div>
+  );
+}
+
+// Sortable table header, hoisted out of the page component so it isn't
+// recreated (and remounted) on every render.
+function SortableTh({
+  label,
+  k,
+  sortKey,
+  sortAsc,
+  onSort,
+}: {
+  label: string;
+  k: keyof Position;
+  sortKey: keyof Position;
+  sortAsc: boolean;
+  onSort: (k: keyof Position) => void;
+}) {
+  return (
+    <th
+      className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-300 select-none"
+      onClick={() => onSort(k)}
+    >
+      {label}{" "}
+      {sortKey === k && <span className="text-violet-400">{sortAsc ? "↑" : "↓"}</span>}
+    </th>
   );
 }
 
@@ -106,9 +122,9 @@ export default function PortfolioPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    const t = setTimeout(load, 0);
     const id = setInterval(load, 15_000);
-    return () => clearInterval(id);
+    return () => { clearTimeout(t); clearInterval(id); };
   }, [load]);
 
   const sorted = portfolio
@@ -123,16 +139,7 @@ export default function PortfolioPage() {
     if (sortKey === key) setSortAsc((p) => !p);
     else { setSortKey(key); setSortAsc(false); }
   };
-
-  const Th = ({ label, k }: { label: string; k: keyof Position }) => (
-    <th
-      className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-300 select-none"
-      onClick={() => handleSort(k)}
-    >
-      {label}{" "}
-      {sortKey === k && <span className="text-violet-400">{sortAsc ? "↑" : "↓"}</span>}
-    </th>
-  );
+  const thProps = { sortKey, sortAsc, onSort: handleSort };
 
   return (
     <div className="flex min-h-screen bg-[#0a0a0f] text-zinc-100">
@@ -235,13 +242,13 @@ export default function PortfolioPage() {
                     <table className="w-full text-sm">
                       <thead className="border-b border-white/10">
                         <tr>
-                          <Th label="Symbol" k="symbol" />
-                          <Th label="Qty" k="quantity" />
-                          <Th label="Avg Cost" k="avg_entry_price" />
-                          <Th label="Price" k="current_price" />
-                          <Th label="Mkt Value" k="market_value" />
-                          <Th label="Unrlzd P&L" k="unrealized_pnl" />
-                          <Th label="Weight" k="weight" />
+                          <SortableTh label="Symbol" k="symbol" {...thProps} />
+                          <SortableTh label="Qty" k="quantity" {...thProps} />
+                          <SortableTh label="Avg Cost" k="avg_entry_price" {...thProps} />
+                          <SortableTh label="Price" k="current_price" {...thProps} />
+                          <SortableTh label="Mkt Value" k="market_value" {...thProps} />
+                          <SortableTh label="Unrlzd P&L" k="unrealized_pnl" {...thProps} />
+                          <SortableTh label="Weight" k="weight" {...thProps} />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">

@@ -143,8 +143,8 @@ function CandleChart({ bars, live }: { bars: Bar[]; live: boolean }) {
 }
 
 // ─── Order Book ───────────────────────────────────────────────────────────────
-function OrderBook({ snap }: { snap: Snap | null }) {
-  const price = snap?.price ?? 70000;
+function OrderBook({ snap, fallback }: { snap: Snap | null; fallback?: number }) {
+  const price = snap?.price ?? fallback ?? 70000;
   const asks = useMemo(()=>genBook(price,"asks",16).reverse(),[price]);
   const bids = useMemo(()=>genBook(price,"bids",16),[price]);
   const maxAsk=asks[asks.length-1]?.cum??1;
@@ -398,6 +398,19 @@ export default function QuantTerminal() {
     const t = setTimeout(() => { fetchBars(sym, tf); fetchSnap(sym); }, 0);
     return () => clearTimeout(t);
   }, [sym, tf, fetchBars, fetchSnap]);
+
+  // Reset symbol-scoped state immediately when the symbol changes (React's
+  // "adjusting state during render" pattern) so the order form never shows
+  // the previous symbol's price/cost while the new symbol's data is in flight.
+  const [prevSym, setPrevSym] = useState(sym);
+  if (prevSym !== sym) {
+    setPrevSym(sym);
+    setSnap(null);
+    setCost(null);
+    setVerdict(null);
+    setSubmitError(null);
+    setLimitPrice("");
+  }
 
   // Poll snapshot every 2 s for live price
   useEffect(() => {
@@ -672,7 +685,7 @@ export default function QuantTerminal() {
               <button style={{ width:20,height:20,background:PN2,border:`1px solid ${BRD}`,color:TXT,fontSize:14,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center" }}>+</button>
             </div>
             <div style={{ flex:1,overflow:"hidden" }}>
-              {bookTab==="order_book"?<OrderBook snap={snap}/>:
+              {bookTab==="order_book"?<OrderBook snap={snap} fallback={price}/>:
                 <div style={{ padding:12,color:DIM,fontSize:11,textAlign:"center",marginTop:20 }}>Trade history</div>
               }
             </div>

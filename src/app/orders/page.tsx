@@ -86,7 +86,10 @@ export default function OrdersPage() {
     }
   }, [statusFilter, limit]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const t = setTimeout(load, 0);
+    return () => clearTimeout(t);
+  }, [load]);
 
   const fills = orders.filter((o) => o.status === "FILLED").length;
   const pending = orders.filter((o) => ["PENDING", "SUBMITTED", "PARTIALLY_FILLED"].includes(o.status)).length;
