@@ -17,7 +17,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+url = get_settings().database_url
+if url.startswith("postgres://"):
+    url = "postgresql+asyncpg://" + url[len("postgres://"):]
+elif url.startswith("postgresql://") and "+asyncpg" not in url:
+    url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+config.set_main_option("sqlalchemy.url", url)
 target_metadata = Base.metadata
 
 
