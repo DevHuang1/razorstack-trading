@@ -32,7 +32,8 @@ Schemas (zod, the TS equivalent of Pydantic): `AnalyzeOpportunityInputSchema`,
 `MarketSnapshotSchema`, `NewsItemSchema`, `PortfolioContextSchema` — all in
 `src/lib/contracts/research.ts`. Malformed input throws before any agent runs.
 
-Without an `XAI_API_KEY` (or the legacy `GROK_API_KEY` / `OPENAI_API_KEY` alias) the
+Without a `GROQ_API_KEY` (or the legacy `XAI_API_KEY` / `GROK_API_KEY` /
+`OPENAI_API_KEY` alias) the
 desk runs fully offline in deterministic mock mode
 (same input ⇒ same output), which is what the committed fixture relies on.
 
