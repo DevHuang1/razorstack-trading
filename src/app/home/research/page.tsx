@@ -232,7 +232,7 @@ export default function ResearchDeskPage() {
     [symbolInput, crisisMode],
   );
 
-  const proposeToRiskEngine = useCallback(async () => {
+  const proposeToRiskEngine = useCallback(async (side: "buy" | "sell") => {
     if (!thesis || !actionable) return;
     const qty = Number(quantityInput);
     if (!Number.isInteger(qty) || qty <= 0) {
@@ -248,7 +248,7 @@ export default function ResearchDeskPage() {
         body: JSON.stringify({
           agent_id: "research-desk",
           symbol: thesis.symbol,
-          side: normalizeDirection(thesis.direction) === "bullish" ? "buy" : "sell",
+          side,
           quantity: qty,
           order_type: "market",
           strategy: "research-desk",
@@ -434,11 +434,12 @@ export default function ResearchDeskPage() {
                         Hand off to risk engine
                       </p>
                       <p className="mt-2 text-xs leading-5 text-zinc-400">
-                        The desk recommends <span className="font-semibold text-zinc-200">
+                        The desk recommends{" "}
+                        <span className="font-semibold text-zinc-200">
                           {normalizeDirection(thesis.direction) === "bullish" ? "BUY" : "SELL"}
                         </span>{" "}
-                        at {thesis.confidence}% confidence. Route the thesis through the deterministic FastAPI risk
-                        gate before execution.
+                        at {thesis.confidence}% confidence. Choose a side and route it through the
+                        deterministic FastAPI risk gate before execution.
                       </p>
                       <div className="mt-3 flex gap-2">
                         <input
@@ -451,10 +452,18 @@ export default function ResearchDeskPage() {
                         <button
                           type="button"
                           disabled={proposing}
-                          onClick={proposeToRiskEngine}
-                          className="flex-1 rounded-lg bg-violet-400 px-3 py-2 text-sm font-semibold text-[#100b1b] transition hover:bg-violet-300 disabled:opacity-50"
+                          onClick={() => proposeToRiskEngine("buy")}
+                          className="flex-1 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-[#04120a] transition hover:bg-emerald-400 disabled:opacity-50"
                         >
-                          {proposing ? "Checking risk…" : "Propose to risk engine"}
+                          {proposing ? "Checking risk…" : "Buy"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={proposing}
+                          onClick={() => proposeToRiskEngine("sell")}
+                          className="flex-1 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-[#140508] transition hover:bg-rose-400 disabled:opacity-50"
+                        >
+                          {proposing ? "Checking risk…" : "Sell"}
                         </button>
                       </div>
                       {riskDecision && (

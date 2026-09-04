@@ -95,14 +95,14 @@ describe("Research desk agent cards", () => {
   });
 
   it("hands the recommended trade off to the risk engine", async () => {
-    const riskResponse = new Response(
-      JSON.stringify({ risk: { status: "APPROVED" }, order: { order_id: "o-1", status: "SUBMITTED" } }),
-      { status: 200 },
-    );
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/research")) return streamedResearchResponse();
-      if (url.includes("/api/trades/propose")) return riskResponse;
+      if (url.includes("/api/trades/propose"))
+        return new Response(
+          JSON.stringify({ risk: { status: "APPROVED" }, order: { order_id: "o-1", status: "SUBMITTED" } }),
+          { status: 200 },
+        );
       throw new Error(`unexpected url ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -114,20 +114,31 @@ describe("Research desk agent cards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run desk" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Propose to risk engine" })).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: "Buy" })).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByRole("textbox", { name: "Position quantity" }), {
       target: { value: "10" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Propose to risk engine" }));
+    fireEvent.click(screen.getByRole("button", { name: "Buy" }));
 
     await waitFor(() => expect(screen.getByText(/APPROVED/)).toBeInTheDocument());
-    const proposeCall = fetchMock.mock.calls.find((call) =>
+    let proposeCall = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes("/api/trades/propose"),
     ) as [string, RequestInit?] | undefined;
     expect(proposeCall).toBeDefined();
     expect(proposeCall![1]).toBeDefined();
-    const payload = JSON.parse(String(proposeCall![1]!.body)) as Record<string, unknown>;
+    let payload = JSON.parse(String(proposeCall![1]!.body)) as Record<string, unknown>;
     expect(payload).toMatchObject({ symbol: "AAPL", side: "buy", quantity: 10, agent_id: "research-desk" });
+
+    fetchMock.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Sell" }));
+    await waitFor(() =>
+      expect(screen.getAllByText(/APPROVED/).length).toBeGreaterThanOrEqual(1),
+    );
+    proposeCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes("/api/trades/propose"),
+    ) as [string, RequestInit?] | undefined;
+    payload = JSON.parse(String(proposeCall![1]!.body)) as Record<string, unknown>;
+    expect(payload).toMatchObject({ symbol: "AAPL", side: "sell", quantity: 10, agent_id: "research-desk" });
   });
 });
