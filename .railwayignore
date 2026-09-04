@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.vercel
+.pytest_cache
+backend
+docs
+fixtures
+.kilo
+*.pyc
+__pycache__
+.env
+.env.local
+.env.production
