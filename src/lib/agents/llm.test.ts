@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { hasLLM } from "./llm";
 
-const KEYS = ["OPENAI_API_KEY", "XAI_API_KEY", "GROK_API_KEY"] as const;
+const KEYS = ["GROQ_API_KEY", "XAI_API_KEY", "GROK_API_KEY", "OPENAI_API_KEY"] as const;
 const ORIGINAL: Record<string, string | undefined> = {};
 for (const k of KEYS) ORIGINAL[k] = process.env[k];
 
@@ -16,10 +16,13 @@ describe("hasLLM", () => {
   it("is false when every key is missing or empty", () => {
     for (const k of KEYS) delete process.env[k];
     expect(hasLLM()).toBe(false);
-    process.env.OPENAI_API_KEY = "";
-    process.env.XAI_API_KEY = "";
-    process.env.GROK_API_KEY = "";
+    for (const k of KEYS) process.env[k] = "";
     expect(hasLLM()).toBe(false);
+  });
+
+  it("is true when GROQ_API_KEY is present", () => {
+    process.env.GROQ_API_KEY = "gsk-test-key";
+    expect(hasLLM()).toBe(true);
   });
 
   it("is true when XAI_API_KEY is present", () => {
