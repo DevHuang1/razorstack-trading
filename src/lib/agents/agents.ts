@@ -65,10 +65,10 @@ const StanceBodySchema = z.object({
 });
 
 const CommitteeRawSchema = StanceBodySchema.extend({
-  direction: z.string().default("HOLD"),
-  catalysts: z.array(z.string()).default([]),
-  risks: z.array(z.string()).default([]),
-  recommendation: z.string().default("No actionable trade recommendation."),
+  direction: z.string(),
+  catalysts: z.array(z.string()),
+  risks: z.array(z.string()),
+  recommendation: z.string(),
 });
 
 const J = "Respond with valid JSON only. No markdown or code fences.";

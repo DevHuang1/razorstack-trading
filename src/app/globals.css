@@ -152,6 +152,8 @@ html.light .text-zinc-300 {
 html.light .text-zinc-400 { color: #52525b; }
 html.light .text-zinc-500 { color: #71717a; }
 html.light .text-zinc-600 { color: #a1a1aa; }
+html.light .bg-zinc-700 { background-color: #e4e4e7; }
+html.light .bg-zinc-800 { background-color: #ececf0; }
 html.light .hover\:bg-white\/5:hover { background-color: rgb(24 24 27 / 0.06); }
 html.light .hover\:bg-white\/10:hover { background-color: rgb(24 24 27 / 0.1); }
 

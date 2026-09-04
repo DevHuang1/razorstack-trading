@@ -1,6 +1,6 @@
 export type Direction = "BUY" | "SELL" | "HOLD";
 
-export type DataSource = "ALPACA" | "SYNTHETIC" | "EXTERNAL";
+export type DataSource = "ALPACA" | "ANCHORED" | "SYNTHETIC" | "EXTERNAL";
 
 export interface Bar {
   t: string;

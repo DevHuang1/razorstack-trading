@@ -3,7 +3,9 @@
  *
  * Priority:
  *   1. Alpaca Markets REST v2  (live bars; requires ALPACA_API_KEY_ID + ALPACA_API_SECRET_KEY)
- *   2. Synthetic GBM fallback  (deterministic by symbol — always works offline)
+ *   2. Anchored synthetic       (real current price via Alpaca trades/latest + synthetic shape —
+ *                                used when the account lacks a bar-history subscription)
+ *   3. Synthetic GBM fallback   (deterministic by symbol — always works offline)
  */
 
 import type { Bar, DataSource } from "./types";
@@ -98,7 +100,7 @@ function makeLcg(seed: number) {
   };
 }
 
-function generateSyntheticBars(symbol: string, limit: number): Bar[] {
+function generateSyntheticBars(symbol: string, limit: number, anchorPrice?: number): Bar[] {
   const rand = makeLcg(symbolSeed(symbol));
 
   // Symbol-specific base params for variety
@@ -142,7 +144,58 @@ function generateSyntheticBars(symbol: string, limit: number): Bar[] {
     price = close;
   }
 
+  if (anchorPrice && bars.length > 0) {
+    const factor = anchorPrice / bars[bars.length - 1].c;
+    for (const bar of bars) {
+      bar.o = Math.round(bar.o * factor * 100) / 100;
+      bar.h = Math.round(bar.h * factor * 100) / 100;
+      bar.l = Math.round(bar.l * factor * 100) / 100;
+      bar.c = Math.round(bar.c * factor * 100) / 100;
+    }
+  }
+
   return bars;
+}
+
+// ─────────────────────────────────────────────
+//  Alpaca latest-trade anchor
+// ─────────────────────────────────────────────
+
+const CRYPTO_SYMBOLS = new Set(["BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "AVAX", "LINK", "UNI", "AAVE", "BCH"]);
+
+/**
+ * Latest executed price for a symbol via Alpaca's `trades/latest` endpoint.
+ * Unlike historical bars, this is available even when the account lacks a
+ * market-data history subscription (bars requests return 403). Returns null
+ * when keys are missing or the request fails.
+ */
+async function fetchLatestTrade(symbol: string): Promise<number | null> {
+  const keyId = process.env.ALPACA_API_KEY_ID;
+  const secretKey = process.env.ALPACA_API_SECRET_KEY;
+  if (!keyId || !secretKey) return null;
+
+  const upper = symbol.toUpperCase();
+  const crypto = CRYPTO_SYMBOLS.has(upper);
+  const url = crypto
+    ? `https://data.alpaca.markets/v2/crypto/${upper}USD/trades/latest`
+    : `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(upper)}/trades/latest`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "APCA-API-KEY-ID": keyId,
+        "APCA-API-SECRET-KEY": secretKey,
+      },
+      signal: AbortSignal.timeout(8000),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { trade?: { p?: number } };
+    const price = Number(json.trade?.p);
+    return Number.isFinite(price) && price > 0 ? price : null;
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -151,7 +204,8 @@ function generateSyntheticBars(symbol: string, limit: number): Bar[] {
 
 /**
  * Fetch OHLCV bars for a symbol.
- * Returns Alpaca live data when API keys are configured, synthetic otherwise.
+ * Returns Alpaca live data when historical bars are available, anchored synthetic
+ * bars at the real latest price otherwise, and pure synthetic bars as last resort.
  */
 export async function getBars(
   symbol: string,
@@ -161,6 +215,11 @@ export async function getBars(
   const alpacaBars = await fetchAlpacaBars(symbol, timeframe, limit);
   if (alpacaBars) {
     return { bars: alpacaBars, source: "ALPACA" };
+  }
+
+  const anchorPrice = await fetchLatestTrade(symbol);
+  if (anchorPrice) {
+    return { bars: generateSyntheticBars(symbol, limit, anchorPrice), source: "ANCHORED" };
   }
 
   return {

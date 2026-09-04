@@ -86,7 +86,7 @@ function AgentCard({
           : mascotState;
   return (
     <article
-      className="rounded-2xl border p-4 transition-colors min-w-0"
+      className="rounded-2xl border p-5 transition-colors min-w-0"
       style={{
         borderColor: active ? `${profile.accent}66` : "var(--trading-border)",
         backgroundColor: active
@@ -96,16 +96,16 @@ function AgentCard({
     >
       <div className="flex items-start justify-between gap-3">
         <AgentMascot role={profile.role} size="md" state={mascotState} showLabel />
-        <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-semibold tracking-[.14em] text-zinc-500 uppercase">
+        <span className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-semibold tracking-[.14em] text-zinc-500 uppercase">
           {statusLabel}
         </span>
       </div>
-      <p className="mt-4 text-sm leading-6 text-zinc-300 break-words">
+      <p className="mt-5 text-sm leading-7 text-zinc-300 break-words">
         {message?.headline ?? profile.shortDescription}
       </p>
       {message && (
         <>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-4 flex items-center gap-2">
             <span
               className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase ${STANCE_STYLES[message.stance]}`}
             >
@@ -117,7 +117,7 @@ function AgentCard({
               </span>
             )}
           </div>
-          <p className="mt-3 text-xs leading-5 text-zinc-500 break-words">{message.body}</p>
+          <p className="mt-4 text-xs leading-6 text-zinc-500 break-words">{message.body}</p>
         </>
       )}
     </article>
@@ -221,9 +221,9 @@ export default function ResearchDeskPage() {
   );
 
   return (
-    <div className="min-h-screen bg-background px-6 py-10 text-foreground sm:px-10 lg:px-16">
-      <div className="mx-auto max-w-6xl">
-        <header className="flex flex-col justify-between gap-10 border-b border-white/10 pb-10 lg:flex-row lg:items-end">
+    <div className="min-h-screen bg-background px-8 py-12 text-foreground sm:px-12 lg:px-20">
+      <div className="mx-auto max-w-7xl">
+        <header className="flex flex-col justify-between gap-12 border-b border-white/10 pb-12 lg:flex-row lg:items-end">
           <div>
             <p className="text-[11px] font-semibold tracking-[.24em] text-violet-300/80 uppercase">
               Razorstack / Intelligence layer
@@ -279,7 +279,7 @@ export default function ResearchDeskPage() {
           </form>
         </header>
 
-        <section className="mt-10 grid gap-4 min-w-0 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="mt-12 grid gap-5 min-w-0 sm:grid-cols-2 xl:grid-cols-5">
           {agentOrder.map((role) => (
             <AgentCard
               key={role}
@@ -289,7 +289,7 @@ export default function ResearchDeskPage() {
           ))}
         </section>
 
-        <section className="mt-10 grid gap-5 min-w-0 overflow-hidden lg:grid-cols-[1.1fr_.9fr]">
+        <section className="mt-12 grid gap-6 min-w-0 overflow-hidden lg:grid-cols-[1.1fr_.9fr]">
           <div className="rounded-2xl border border-white/10 bg-white/[.03] p-5 min-w-0 overflow-hidden">
             <div className="flex items-center justify-between gap-3 min-w-0">
               <div className="min-w-0">
