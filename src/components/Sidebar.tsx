@@ -10,7 +10,6 @@ const NAV_ITEMS = [
   { href: "/home/portfolio", label: "Portfolio", icon: "💼" },
   { href: "/home/orders", label: "Orders", icon: "↗" },
   { href: "/home/risk", label: "Risk", icon: "🛡" },
-  { href: "/home/alpaca-test", label: "Alpaca", icon: "🪜" },
 ];
 
 export function Sidebar() {

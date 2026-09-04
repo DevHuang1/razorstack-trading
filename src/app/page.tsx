@@ -42,24 +42,6 @@ const MODULES = [
     features: ["Crypto + equities", "Live OHLCV charts", "Multi-timeframe", "Signal engine"],
     cta: "Open the terminal →",
   },
-  {
-    href: "/home/alpaca-test",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth={1.5}>
-        <path d="M13.5 21v-7.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349M3.75 21V9.349m0 0a3.001 3.001 0 0 0 3.75-.615A2.993 2.993 0 0 0 9.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 0 0 2.25 1.016c.896 0 1.7-.393 2.25-1.015A3.001 3.001 0 0 0 20.25 9.35m0 0V6.375m0 3H2.36m11.14 0H18" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-    accent: "emerald",
-    gradient: "from-emerald-500/20 to-emerald-600/5",
-    ring: "hover:border-emerald-400/40 hover:shadow-emerald-500/10",
-    dot: "bg-emerald-400",
-    title: "Alpaca Bridge",
-    tagline: "Execution layer",
-    description:
-      "Connect the analysis to real markets through Alpaca. Probe the API, inspect live responses, and wire the desk's decisions toward execution.",
-    features: ["Live API tester", "Market data", "Orders & accounts", "Server-side keys"],
-    cta: "Open the bridge →",
-  },
 ];
 
 const SPECIALISTS = [

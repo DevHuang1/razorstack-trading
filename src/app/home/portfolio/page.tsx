@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Sidebar } from "@/components/Sidebar";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Position {
@@ -142,9 +141,7 @@ export default function PortfolioPage() {
   const thProps = { sortKey, sortAsc, onSort: handleSort };
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <Sidebar />
-      <main className="flex-1 p-6 space-y-6">
+    <div className="flex-1 p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -289,7 +286,6 @@ export default function PortfolioPage() {
             </div>
           </>
         )}
-      </main>
-    </div>
+      </div>
   );
 }
