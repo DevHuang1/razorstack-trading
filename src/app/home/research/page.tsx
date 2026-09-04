@@ -232,41 +232,73 @@ export default function ResearchDeskPage() {
     [symbolInput, crisisMode],
   );
 
-  const proposeToRiskEngine = useCallback(async (side: "buy" | "sell") => {
-    if (!thesis || !actionable) return;
-    const qty = Number(quantityInput);
-    if (!Number.isInteger(qty) || qty <= 0) {
-      setRiskDecision({ status: "error", error: "Enter a positive whole-number quantity." });
-      return;
-    }
-    setProposing(true);
-    setRiskDecision(null);
-    try {
-      const response = await fetch("/api/trades/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agent_id: "research-desk",
-          symbol: thesis.symbol,
-          side,
-          quantity: qty,
-          order_type: "market",
-          strategy: "research-desk",
-          confidence: thesis.confidence / 100,
-          reasoning: (thesis.summary + " " + thesis.recommendation).slice(0, 4000),
-        }),
+  const submitTrade = useCallback(
+    async ({
+      side,
+      symbol,
+      confidence,
+      reasoning,
+    }: {
+      side: "buy" | "sell";
+      symbol: string;
+      confidence: number;
+      reasoning: string;
+    }) => {
+      const qty = Number(quantityInput);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        setRiskDecision({ status: "error", error: "Enter a positive whole-number quantity." });
+        return;
+      }
+      setProposing(true);
+      setRiskDecision(null);
+      try {
+        const response = await fetch("/api/trades/propose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agent_id: "research-desk",
+            symbol: symbol.toUpperCase(),
+            side,
+            quantity: qty,
+            order_type: "market",
+            strategy: "research-desk",
+            confidence,
+            reasoning: reasoning.slice(0, 4000),
+          }),
+        });
+        const body = (await response.json()) as RiskDecision;
+        setRiskDecision({
+          ...body,
+          status: body.error ? "error" : response.ok ? "approved" : "rejected",
+        });
+      } catch {
+        setRiskDecision({ status: "error", error: "Risk engine is unavailable." });
+      } finally {
+        setProposing(false);
+      }
+    },
+    [quantityInput],
+  );
+
+  const quickOrder = useCallback(
+    (side: "buy" | "sell") => {
+      const sym = symbolInput.trim();
+      if (!/^[A-Za-z]{1,6}$/.test(sym)) {
+        setRiskDecision({ status: "error", error: "Enter a ticker (letters only) first." });
+        return;
+      }
+      const matchesThesis = thesis && thesis.symbol === sym.toUpperCase();
+      void submitTrade({
+        side,
+        symbol: sym,
+        confidence: matchesThesis ? thesis.confidence / 100 : 0.5,
+        reasoning: matchesThesis
+          ? thesis.summary + " " + thesis.recommendation
+          : `Manual ${side} order for ${sym.toUpperCase()}.`,
       });
-      const body = (await response.json()) as RiskDecision;
-      setRiskDecision({
-        ...body,
-        status: body.error ? "error" : response.ok ? "approved" : "rejected",
-      });
-    } catch {
-      setRiskDecision({ status: "error", error: "Risk engine is unavailable." });
-    } finally {
-      setProposing(false);
-    }
-  }, [thesis, actionable, quantityInput]);
+    },
+    [symbolInput, thesis, submitTrade],
+  );
 
   return (
     <div className="min-h-screen bg-background px-5 py-8 text-foreground sm:px-8 lg:px-12">
@@ -302,6 +334,50 @@ export default function ResearchDeskPage() {
                 {running ? "Running" : "Run desk"}
               </button>
             </div>
+            <div className="flex gap-2">
+              <input
+                value={quantityInput}
+                onChange={(event) => setQuantityInput(event.target.value)}
+                className="w-24 rounded-xl border border-white/10 bg-white/[.04] px-3 py-3 text-center font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-violet-400/70"
+                placeholder="Qty"
+                aria-label="Order quantity"
+              />
+              <button
+                type="button"
+                onClick={() => quickOrder("buy")}
+                disabled={proposing}
+                className="flex-1 rounded-xl bg-emerald-400 px-3 py-3 text-sm font-semibold text-[#04140c] transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Buy"
+              >
+                BUY
+              </button>
+              <button
+                type="button"
+                onClick={() => quickOrder("sell")}
+                disabled={proposing}
+                className="flex-1 rounded-xl bg-rose-400 px-3 py-3 text-sm font-semibold text-[#180608] transition hover:bg-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Sell"
+              >
+                SELL
+              </button>
+            </div>
+            {riskDecision && (
+              <div
+                className={`rounded-xl border px-3 py-2 text-xs ${
+                  riskDecision.status === "approved"
+                    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                    : riskDecision.status === "error"
+                      ? "border-rose-400/30 bg-rose-400/10 text-rose-300"
+                      : "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                }`}
+              >
+                {riskDecision.error
+                  ? riskDecision.error
+                  : `${riskDecision.status.toUpperCase()}${
+                      riskDecision.reason ? ` — ${riskDecision.reason}` : ""
+                    }${riskDecision.order?.status ? ` · ${riskDecision.order.status}` : ""}`}
+              </div>
+            )}
             <label className="flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 text-sm transition-colors select-none
               border-rose-400/20 bg-rose-400/[.05] text-rose-300/80 hover:border-rose-400/40"
             >
@@ -429,63 +505,13 @@ export default function ResearchDeskPage() {
 
                 {!crisisMode &&
                   (actionable ? (
-                    <div className="mt-5 rounded-2xl border border-violet-400/30 bg-black/20 p-4">
-                      <p className="text-[10px] font-semibold tracking-[.18em] text-violet-300/80 uppercase">
-                        Hand off to risk engine
-                      </p>
-                      <p className="mt-2 text-xs leading-5 text-zinc-400">
-                        The desk recommends{" "}
-                        <span className="font-semibold text-zinc-200">
-                          {normalizeDirection(thesis.direction) === "bullish" ? "BUY" : "SELL"}
-                        </span>{" "}
-                        at {thesis.confidence}% confidence. Choose a side and route it through the
-                        deterministic FastAPI risk gate before execution.
-                      </p>
-                      <div className="mt-3 flex gap-2">
-                        <input
-                          value={quantityInput}
-                          onChange={(event) => setQuantityInput(event.target.value)}
-                          aria-label="Position quantity"
-                          className="w-24 rounded-lg border border-white/10 bg-white/[.04] px-3 py-2 font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-violet-400/70"
-                          placeholder="Qty"
-                        />
-                        <button
-                          type="button"
-                          disabled={proposing}
-                          onClick={() => proposeToRiskEngine("buy")}
-                          className="flex-1 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-[#04120a] transition hover:bg-emerald-400 disabled:opacity-50"
-                        >
-                          {proposing ? "Checking risk…" : "Buy"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={proposing}
-                          onClick={() => proposeToRiskEngine("sell")}
-                          className="flex-1 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-[#140508] transition hover:bg-rose-400 disabled:opacity-50"
-                        >
-                          {proposing ? "Checking risk…" : "Sell"}
-                        </button>
-                      </div>
-                      {riskDecision && (
-                        <div
-                          className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-                            riskDecision.status === "approved"
-                              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                              : riskDecision.status === "error"
-                                ? "border-rose-400/30 bg-rose-400/10 text-rose-300"
-                                : "border-amber-400/30 bg-amber-400/10 text-amber-300"
-                          }`}
-                        >
-                          {riskDecision.error
-                            ? riskDecision.error
-                            : `${riskDecision.status.toUpperCase()}${
-                                riskDecision.reason ? ` — ${riskDecision.reason}` : ""
-                              }${
-                                riskDecision.order?.status ? ` · ${riskDecision.order.status}` : ""
-                              }`}
-                        </div>
-                      )}
-                    </div>
+                    <p className="mt-5 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs text-zinc-500">
+                      The desk recommends{" "}
+                      <span className="font-semibold text-zinc-200">
+                        {normalizeDirection(thesis.direction) === "bullish" ? "BUY" : "SELL"}
+                      </span>{" "}
+                      at {thesis.confidence}% confidence — route it with the order bar above.
+                    </p>
                   ) : (
                     <p className="mt-5 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs text-zinc-500">
                       Recommendation is {thesis.direction}; nothing to route to the execution risk engine.

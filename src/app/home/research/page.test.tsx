@@ -116,7 +116,7 @@ describe("Research desk agent cards", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Buy" })).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByRole("textbox", { name: "Position quantity" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Order quantity" }), {
       target: { value: "10" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Buy" }));
