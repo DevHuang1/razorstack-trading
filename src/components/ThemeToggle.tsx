@@ -1,26 +1,53 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 type Theme = "dark" | "light";
 
-export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>("dark");
+const STORAGE_KEY = "razorstack-theme";
 
+let cachedTheme: Theme | null = null;
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getSnapshot(): Theme {
+  if (cachedTheme === null) {
+    cachedTheme =
+      window.localStorage.getItem(STORAGE_KEY) === "light" ? "light" : "dark";
+  }
+  return cachedTheme;
+}
+
+// Hydration-safe: render dark on the server, adopt the saved theme after mount.
+function getServerSnapshot(): Theme {
+  return "dark";
+}
+
+function applyThemeClasses(theme: Theme): void {
+  document.documentElement.classList.toggle("light", theme === "light");
+  document.documentElement.classList.toggle("dark", theme === "dark");
+}
+
+export function ThemeToggle() {
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  // Sync the theme classes on <html> (an external system) — no setState here.
   useEffect(() => {
-    const saved = window.localStorage.getItem("razorstack-theme");
-    const nextTheme: Theme = saved === "light" ? "light" : "dark";
-    setTheme(nextTheme);
-    document.documentElement.classList.toggle("light", nextTheme === "light");
-    document.documentElement.classList.toggle("dark", nextTheme === "dark");
-  }, []);
+    applyThemeClasses(theme);
+  }, [theme]);
 
   const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    window.localStorage.setItem("razorstack-theme", nextTheme);
-    document.documentElement.classList.toggle("light", nextTheme === "light");
-    document.documentElement.classList.toggle("dark", nextTheme === "dark");
+    const nextTheme: Theme = theme === "dark" ? "light" : "dark";
+    cachedTheme = nextTheme;
+    window.localStorage.setItem(STORAGE_KEY, nextTheme);
+    applyThemeClasses(nextTheme);
+    for (const listener of listeners) listener();
   };
 
   return (
