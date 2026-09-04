@@ -1,5 +1,6 @@
 // ─── Alpaca Data Client ───────────────────────────────────────────────────────
 const BASE = "https://data.alpaca.markets";
+const DATA_TIMEOUT_MS = 8_000;
 
 function h() {
   return {
@@ -30,6 +31,24 @@ export interface Snapshot {
   volume: number; change: number; changePct: number;
 }
 
+interface AlpacaBarPayload {
+  t: string;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
+interface AlpacaQuotePayload { bp?: number; ap?: number }
+interface AlpacaPriceBarPayload { o?: number; h?: number; l?: number; c?: number; v?: number }
+interface AlpacaSnapshotPayload {
+  latestTrade?: { p?: number };
+  latestQuote?: AlpacaQuotePayload;
+  dailyBar?: AlpacaPriceBarPayload;
+  prevDailyBar?: AlpacaPriceBarPayload;
+}
+
 // ─── Historical bars ──────────────────────────────────────────────────────────
 export async function getBars(sym: string, tf: string, limit = 120): Promise<Bar[]> {
   const upper = sym.toUpperCase();
@@ -38,18 +57,18 @@ export async function getBars(sym: string, tf: string, limit = 120): Promise<Bar
   try {
     if (isCrypto(upper)) {
       const url = `${BASE}/v1beta3/crypto/us/bars?symbols=${upper}/USD&timeframe=${timeframe}&limit=${limit}&sort=asc`;
-      const res = await fetch(url, { headers: h(), cache: "no-store" });
+      const res = await fetch(url, { headers: h(), cache: "no-store", signal: AbortSignal.timeout(DATA_TIMEOUT_MS) });
       if (!res.ok) return [];
-      const data = await res.json();
-      return (data.bars?.[`${upper}/USD`] ?? []).map((b: any) => ({
+      const data = await res.json() as { bars?: Record<string, AlpacaBarPayload[]> };
+      return (data.bars?.[`${upper}/USD`] ?? []).map((b) => ({
         t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
       }));
     } else {
       const url = `${BASE}/v2/stocks/${upper}/bars?timeframe=${timeframe}&limit=${limit}&sort=asc&feed=iex`;
-      const res = await fetch(url, { headers: h(), cache: "no-store" });
+      const res = await fetch(url, { headers: h(), cache: "no-store", signal: AbortSignal.timeout(DATA_TIMEOUT_MS) });
       if (!res.ok) return [];
-      const data = await res.json();
-      return (data.bars ?? []).map((b: any) => ({
+      const data = await res.json() as { bars?: AlpacaBarPayload[] };
+      return (data.bars ?? []).map((b) => ({
         t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
       }));
     }
@@ -57,7 +76,7 @@ export async function getBars(sym: string, tf: string, limit = 120): Promise<Bar
 }
 
 // ─── Single snapshot ──────────────────────────────────────────────────────────
-function parseSnap(s: any): Snapshot {
+function parseSnap(s: AlpacaSnapshotPayload): Snapshot {
   const price = s.latestTrade?.p ?? s.latestQuote?.ap ?? s.latestQuote?.bp ?? 0;
   const open  = s.dailyBar?.o ?? price;
   const change    = price - open;
@@ -80,16 +99,16 @@ export async function getSnapshot(sym: string): Promise<Snapshot | null> {
   try {
     if (isCrypto(upper)) {
       const url = `${BASE}/v1beta3/crypto/us/snapshots?symbols=${upper}/USD`;
-      const res = await fetch(url, { headers: h(), cache: "no-store" });
+      const res = await fetch(url, { headers: h(), cache: "no-store", signal: AbortSignal.timeout(DATA_TIMEOUT_MS) });
       if (!res.ok) return null;
-      const data = await res.json();
+      const data = await res.json() as { snapshots?: Record<string, AlpacaSnapshotPayload> };
       const s = data.snapshots?.[`${upper}/USD`];
       return s ? parseSnap(s) : null;
     } else {
       const url = `${BASE}/v2/stocks/${upper}/snapshot?feed=iex`;
-      const res = await fetch(url, { headers: h(), cache: "no-store" });
+      const res = await fetch(url, { headers: h(), cache: "no-store", signal: AbortSignal.timeout(DATA_TIMEOUT_MS) });
       if (!res.ok) return null;
-      return parseSnap(await res.json());
+      return parseSnap(await res.json() as AlpacaSnapshotPayload);
     }
   } catch { return null; }
 }
@@ -107,9 +126,9 @@ export async function getMultiSnapshots(
       if (!cryptoList.length) return;
       const pairs = cryptoList.map(s => `${s.toUpperCase()}/USD`).join(",");
       const url = `${BASE}/v1beta3/crypto/us/snapshots?symbols=${pairs}`;
-      const res = await fetch(url, { headers: h(), cache: "no-store" });
+      const res = await fetch(url, { headers: h(), cache: "no-store", signal: AbortSignal.timeout(DATA_TIMEOUT_MS) });
       if (!res.ok) return;
-      const data = await res.json();
+      const data = await res.json() as { snapshots?: Record<string, AlpacaSnapshotPayload> };
       for (const sym of cryptoList) {
         const s = data.snapshots?.[`${sym.toUpperCase()}/USD`];
         if (s) result[sym.toUpperCase()] = parseSnap(s);
@@ -118,9 +137,9 @@ export async function getMultiSnapshots(
     (async () => {
       if (!stockList.length) return;
       const url = `${BASE}/v2/stocks/snapshots?symbols=${stockList.join(",")}&feed=iex`;
-      const res = await fetch(url, { headers: h(), cache: "no-store" });
+      const res = await fetch(url, { headers: h(), cache: "no-store", signal: AbortSignal.timeout(DATA_TIMEOUT_MS) });
       if (!res.ok) return;
-      const data = await res.json();
+      const data = await res.json() as Record<string, AlpacaSnapshotPayload>;
       for (const sym of stockList) {
         const s = data[sym.toUpperCase()];
         if (s) result[sym.toUpperCase()] = parseSnap(s);

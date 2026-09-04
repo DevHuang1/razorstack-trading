@@ -46,16 +46,6 @@ function Sign({ value }: { value: number }) {
   );
 }
 
-function Pct({ value }: { value: number }) {
-  const cls = value >= 0 ? "text-emerald-400" : "text-red-400";
-  return (
-    <span className={cls}>
-      {value >= 0 ? "+" : ""}
-      {fmt(value * 100)}%
-    </span>
-  );
-}
-
 const SECTOR_COLORS: Record<string, string> = {
   technology: "bg-violet-500",
   financials: "bg-cyan-500",
@@ -81,6 +71,12 @@ function SectorBar({ name, pct }: { name: string; pct: number }) {
   );
 }
 
+function SortHeader({ label, column, active, ascending, onSort }: { label: string; column: keyof Position; active: boolean; ascending: boolean; onSort: (key: keyof Position) => void }) {
+  return <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider whitespace-nowrap">
+    <button type="button" className="min-h-11 hover:text-zinc-300 select-none" onClick={() => onSort(column)}>{label} {active && <span className="text-violet-400">{ascending ? "↑" : "↓"}</span>}</button>
+  </th>;
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function PortfolioPage() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -104,17 +100,20 @@ export default function PortfolioPage() {
     }
   }, []);
 
+  // Portfolio polling synchronizes this page with the API.
   useEffect(() => {
-    load();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
     const id = setInterval(load, 15_000);
     return () => clearInterval(id);
   }, [load]);
 
   const sorted = portfolio
     ? [...portfolio.positions].sort((a, b) => {
-        const av = a[sortKey] as number;
-        const bv = b[sortKey] as number;
-        return sortAsc ? av - bv : bv - av;
+        const av = a[sortKey];
+        const bv = b[sortKey];
+        const comparison = typeof av === "string" && typeof bv === "string" ? av.localeCompare(bv) : Number(av) - Number(bv);
+        return sortAsc ? comparison : -comparison;
       })
     : [];
 
@@ -123,18 +122,8 @@ export default function PortfolioPage() {
     else { setSortKey(key); setSortAsc(false); }
   };
 
-  const Th = ({ label, k }: { label: string; k: keyof Position }) => (
-    <th
-      className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-300 select-none"
-      onClick={() => handleSort(k)}
-    >
-      {label}{" "}
-      {sortKey === k && <span className="text-violet-400">{sortAsc ? "↑" : "↓"}</span>}
-    </th>
-  );
-
   return (
-    <div className="flex-1 p-6 space-y-6">
+    <div className="dashboard-page flex-1 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -232,13 +221,13 @@ export default function PortfolioPage() {
                     <table className="w-full text-sm">
                       <thead className="border-b border-white/10">
                         <tr>
-                          <Th label="Symbol" k="symbol" />
-                          <Th label="Qty" k="quantity" />
-                          <Th label="Avg Cost" k="avg_entry_price" />
-                          <Th label="Price" k="current_price" />
-                          <Th label="Mkt Value" k="market_value" />
-                          <Th label="Unrlzd P&L" k="unrealized_pnl" />
-                          <Th label="Weight" k="weight" />
+                          <SortHeader label="Symbol" column="symbol" active={sortKey === "symbol"} ascending={sortAsc} onSort={handleSort} />
+                          <SortHeader label="Qty" column="quantity" active={sortKey === "quantity"} ascending={sortAsc} onSort={handleSort} />
+                          <SortHeader label="Avg Cost" column="avg_entry_price" active={sortKey === "avg_entry_price"} ascending={sortAsc} onSort={handleSort} />
+                          <SortHeader label="Price" column="current_price" active={sortKey === "current_price"} ascending={sortAsc} onSort={handleSort} />
+                          <SortHeader label="Mkt Value" column="market_value" active={sortKey === "market_value"} ascending={sortAsc} onSort={handleSort} />
+                          <SortHeader label="Unrlzd P&L" column="unrealized_pnl" active={sortKey === "unrealized_pnl"} ascending={sortAsc} onSort={handleSort} />
+                          <SortHeader label="Weight" column="weight" active={sortKey === "weight"} ascending={sortAsc} onSort={handleSort} />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">

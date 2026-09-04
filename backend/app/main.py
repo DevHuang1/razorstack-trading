@@ -130,6 +130,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     setup_logging(settings.log_level)
 
+    if settings.broker_mode == "alpaca" and not settings.alpaca_paper:
+        raise ValueError("Live trading is disabled; ALPACA_PAPER must remain true")
+
     engine = make_engine(settings)
     session_factory = make_sessionmaker(engine)
 

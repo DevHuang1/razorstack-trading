@@ -85,13 +85,15 @@ export default function OrdersPage() {
     }
   }, [statusFilter, limit]);
 
-  useEffect(() => { load(); }, [load]);
+  // Loading API state is the synchronization this effect owns.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void load(); }, [load]);
 
   const fills = orders.filter((o) => o.status === "FILLED").length;
   const pending = orders.filter((o) => ["PENDING", "SUBMITTED", "PARTIALLY_FILLED"].includes(o.status)).length;
 
   return (
-    <div className="flex-1 p-6 space-y-6">
+    <div className="dashboard-page flex-1 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -116,7 +118,7 @@ export default function OrdersPage() {
         )}
 
         {/* Filters */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="text-xs text-zinc-500">Status</label>
           <select
             value={statusFilter}

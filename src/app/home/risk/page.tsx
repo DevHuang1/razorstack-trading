@@ -138,8 +138,10 @@ export default function RiskPage() {
     }
   }, []);
 
+  // Risk polling synchronizes this page with the API.
   useEffect(() => {
-    load();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
     const id = setInterval(load, 10_000);
     return () => clearInterval(id);
   }, [load]);
@@ -148,7 +150,7 @@ export default function RiskPage() {
   const l = risk?.limits;
 
   return (
-    <div className="flex-1 p-6 space-y-6">
+    <div className="dashboard-page flex-1 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

@@ -5,50 +5,40 @@ import { usePathname } from "next/navigation";
 import { ThemeToggle } from "./ThemeToggle";
 
 const NAV_ITEMS = [
-  { href: "/home/research", label: "Research", icon: "🧠" },
-  { href: "/home/quant", label: "Quant", icon: "📊" },
-  { href: "/home/portfolio", label: "Portfolio", icon: "💼" },
+  { href: "/home/research", label: "Research", icon: "◉" },
+  { href: "/home/quant", label: "Quant", icon: "⌁" },
+  { href: "/home/portfolio", label: "Portfolio", icon: "▦" },
   { href: "/home/orders", label: "Orders", icon: "↗" },
-  { href: "/home/risk", label: "Risk", icon: "🛡" },
+  { href: "/home/risk", label: "Risk", icon: "◇" },
 ];
 
-export function Sidebar() {
+interface SidebarProps { collapsed: boolean; mobileOpen: boolean; onCloseMobile: () => void; onToggleCollapsed: () => void; }
+
+export function Sidebar({ collapsed, mobileOpen, onCloseMobile, onToggleCollapsed }: SidebarProps) {
   const pathname = usePathname();
-
   return (
-    <aside className="flex min-h-screen w-64 min-w-64 max-w-64 shrink-0 flex-col border-r border-white/10 bg-black/20 p-4">
-      <div className="flex items-center gap-3 mb-8 px-2">
-        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet-600 to-cyan-500 flex items-center justify-center font-bold text-white text-sm">
-          R
-        </div>
-        <span className="text-lg font-bold tracking-wider text-zinc-100">Razorstack</span>
+    <aside className={`dashboard-sidebar ${collapsed ? "is-collapsed" : ""} ${mobileOpen ? "is-mobile-open" : ""}`} aria-label="Dashboard navigation">
+      <div className="dashboard-sidebar__brand-row">
+        <Link href="/home/research" className="dashboard-sidebar__brand" aria-label="Razorstack home" onClick={onCloseMobile}>
+          <span className="brand-mark">R</span><span className="dashboard-sidebar__brand-name">Razorstack</span>
+        </Link>
+        <button type="button" className="dashboard-sidebar__mobile-close" aria-label="Close navigation" onClick={onCloseMobile}>×</button>
       </div>
-
-      <nav aria-label="Primary navigation" className="flex flex-col gap-1">
+      <div className="dashboard-sidebar__status"><span className="dashboard-sidebar__status-dot" /><span className="dashboard-sidebar__status-text">Paper trading</span></div>
+      <nav aria-label="Primary navigation" className="dashboard-sidebar__nav">
         {NAV_ITEMS.map((item) => {
           const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`
-                flex items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition-all
-                ${isActive
-                  ? "bg-violet-500/15 text-violet-300 border border-violet-500/30"
-                  : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200 border border-transparent"
-                }
-              `}
-            >
-              <span className="text-base">{item.icon}</span>
-              {item.label}
-            </Link>
-          );
+          return <Link key={item.href} href={item.href} title={collapsed ? item.label : undefined} aria-current={isActive ? "page" : undefined} aria-label={collapsed ? item.label : undefined} onClick={onCloseMobile} className={`dashboard-sidebar__link ${isActive ? "is-active" : ""}`}>
+            <span className="dashboard-sidebar__icon" aria-hidden="true">{item.icon}</span><span className="dashboard-sidebar__label">{item.label}</span>
+          </Link>;
         })}
       </nav>
-
-      <div className="mt-auto space-y-3 border-t border-white/10 pt-4">
-        <ThemeToggle />
-        <p className="px-1 text-[10px] uppercase tracking-wider text-zinc-600">v0.1.0</p>
+      <div className="dashboard-sidebar__footer">
+        <ThemeToggle compact={collapsed} />
+        <button type="button" className="dashboard-sidebar__collapse" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          <span aria-hidden="true">{collapsed ? "›" : "‹"}</span><span className="dashboard-sidebar__label">Collapse</span>
+        </button>
+        <p className="dashboard-sidebar__version">v0.1.0</p>
       </div>
     </aside>
   );

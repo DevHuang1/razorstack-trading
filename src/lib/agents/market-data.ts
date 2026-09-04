@@ -65,7 +65,7 @@ export async function fetchNews(symbol: string): Promise<NewsItem[]> {
   if (!keyId || !secretKey) return [{ id: `synthetic-${symbol}-1`, headline: `${symbol} under review`, summary: "Market monitoring active", source: "Synthetic", publishedAt: new Date().toISOString(), sentiment: null }];
   try {
     const params = new URLSearchParams({ symbols: symbol, limit: "10", sort: "desc" });
-    const res = await fetch(`https://data.alpaca.markets/v1beta1/news?${params}`, { headers: { "APCA-AIP-KEY-ID": keyId, "APCA-API-SECRET-KEY": secretKey }, signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`https://data.alpaca.markets/v1beta1/news?${params}`, { headers: { "APCA-API-KEY-ID": keyId, "APCA-API-SECRET-KEY": secretKey }, signal: AbortSignal.timeout(5000) });
     if (!res.ok) return [];
     const json = (await res.json()) as { news?: Array<{ id: unknown; headline: string; summary?: string; source: string; created_at: string }> };
     return (json.news ?? []).map((n) => ({ id: String(n.id), headline: n.headline, summary: n.summary || n.headline, source: n.source, publishedAt: n.created_at, sentiment: null }));

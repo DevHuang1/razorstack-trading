@@ -2,6 +2,7 @@ import type { Bar } from "../types";
 
 const DEFAULT_FEED = "iex";
 const REQUEST_TIMEOUT_MS = 8000;
+const CRYPTO_SYMBOLS = new Set(["BTC", "ETH", "SOL", "AVAX", "DOGE", "LINK", "LTC", "UNI", "AAVE", "BCH"]);
 
 interface AlpacaBar {
   t: string;
@@ -35,12 +36,17 @@ export async function fetchAlpacaBars(
   if (!creds) return null;
 
   try {
-    const url = new URL("https://data.alpaca.markets/v2/stocks/bars");
-    url.searchParams.set("symbols", symbol.toUpperCase());
+    const upperSymbol = symbol.toUpperCase();
+    const crypto = CRYPTO_SYMBOLS.has(upperSymbol);
+    const url = new URL(crypto ? "https://data.alpaca.markets/v1beta3/crypto/us/bars" : "https://data.alpaca.markets/v2/stocks/bars");
+    const requestSymbol = crypto ? `${upperSymbol}/USD` : upperSymbol;
+    url.searchParams.set("symbols", requestSymbol);
     url.searchParams.set("timeframe", timeframe);
     url.searchParams.set("limit", String(Math.min(limit, 10000)));
-    url.searchParams.set("adjustment", "splits");
-    url.searchParams.set("feed", process.env.ALPACA_DATA_FEED ?? DEFAULT_FEED);
+    if (!crypto) {
+      url.searchParams.set("adjustment", "splits");
+      url.searchParams.set("feed", process.env.ALPACA_DATA_FEED ?? DEFAULT_FEED);
+    }
 
     const start = new Date();
     start.setUTCDate(start.getUTCDate() - Math.ceil(limit * 2) - 10);
@@ -57,7 +63,7 @@ export async function fetchAlpacaBars(
     if (!res.ok) return null;
 
     const json = (await res.json()) as { bars?: Record<string, AlpacaBar[]> };
-    const raw = json.bars?.[symbol.toUpperCase()];
+    const raw = json.bars?.[requestSymbol];
     if (!Array.isArray(raw) || raw.length === 0) return null;
 
     const bars: Bar[] = raw.map((b) => ({
