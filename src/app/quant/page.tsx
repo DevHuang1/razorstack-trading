@@ -28,6 +28,19 @@ interface Snap { price: number; bid: number; ask: number; open: number; high: nu
 interface Level { price: number; amount: number; cum: number; }
 interface AgentMsg { role: string; stance?: string; confidence?: number; body?: string; }
 interface Thesis { symbol?: string; direction?: string; summary?: string; confidence?: number; }
+interface OrderRow {
+  id: string; agent_id: string; symbol: string; side: string; quantity: number;
+  filled_quantity: number; avg_fill_price: number | null; order_type: string;
+  limit_price: number | null; status: string; reject_reason: string | null; created_at: string;
+}
+interface CostEstimate { gross_notional: number; total_cost: number; buy_cash_required: number; sell_net_proceeds: number; }
+interface ProposeResponse {
+  proposal?: { id?: string; status?: string };
+  risk?: { status?: string; reason?: string; code?: string; original_quantity?: number; approved_quantity?: number };
+  order?: { id?: string; status?: string; filled_quantity?: number; avg_fill_price?: number | null; reject_reason?: string | null } | null;
+  error?: string;
+}
+const OPEN_ORDER_STATUSES = new Set(["PENDING", "SUBMITTED", "PARTIALLY_FILLED", "ACCEPTED", "NEW"]);
 
 // ─── Seeded fallback RNG ─────────────────────────────────────────────────────
 function mkRng(seed: number) {
@@ -335,7 +348,7 @@ export default function QuantTerminal() {
   const [crisis] = useState(false);
   const [running,setRunning] = useState(false);
   const [statusMsg,setStatusMsg] = useState("");
-  const [messages,setMessages] = useState<Map<string,AgentMsg>>(new Map());
+  const [,setMessages] = useState<Map<string,AgentMsg>>(new Map());
   const [thesis,setThesis] = useState<Thesis|null>(null);
   const abortRef = useRef<AbortController|null>(null);
 
@@ -344,6 +357,16 @@ export default function QuantTerminal() {
   const [snap,setSnap] = useState<Snap|null>(null);
   const [loading,setLoading] = useState(true);
   const [liveError,setLiveError] = useState(false);
+
+  // ── Trading state ────────────────────────────────────────────────────────────
+  const [qty,setQty] = useState("1");
+  const [limitPrice,setLimitPrice] = useState("");
+  const [orders,setOrders] = useState<OrderRow[]>([]);
+  const [showAllOrders,setShowAllOrders] = useState(false);
+  const [cost,setCost] = useState<CostEstimate|null>(null);
+  const [submitting,setSubmitting] = useState(false);
+  const [verdict,setVerdict] = useState<ProposeResponse|null>(null);
+  const [submitError,setSubmitError] = useState<string|null>(null);
 
   // Fetch historical bars
   const fetchBars = useCallback(async (s: string, t: Tf) => {
@@ -398,6 +421,76 @@ export default function QuantTerminal() {
 
   // Use bars for chart if we have them, else fallback
   const chartBars = bars.length > 0 ? bars : genFallbackCandles(sym, tf, 120);
+
+  // ── Orders: fetch + poll ─────────────────────────────────────────────────────
+  const fetchOrders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/orders?limit=50");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setOrders(data);
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    const t = setTimeout(fetchOrders, 0);
+    const id = setInterval(fetchOrders, 5000);
+    return () => { clearTimeout(t); clearInterval(id); };
+  }, [fetchOrders]);
+
+  // ── Live pre-trade cost estimate (debounced) ─────────────────────────────────
+  useEffect(() => {
+    let ignore = false;
+    const t = setTimeout(() => {
+      const q = Math.floor(Number(qty));
+      if (!Number.isFinite(q) || q <= 0 || price <= 0) { setCost(null); return; }
+      fetch("/api/quant/execution-cost", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: sym, side, quantity: q, reference_price: price, order_type: oType === "MARKET" ? "market" : "limit" }),
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (!ignore) setCost(d && typeof d.gross_notional === "number" ? d : null); })
+        .catch(() => { if (!ignore) setCost(null); });
+    }, 300);
+    return () => { ignore = true; clearTimeout(t); };
+  }, [qty, price, side, oType, sym]);
+
+  // ── Submit a proposal to the FastAPI risk gate ───────────────────────────────
+  const submitOrder = useCallback(async () => {
+    const q = Math.floor(Number(qty));
+    if (!Number.isFinite(q) || q <= 0) { setSubmitError("Quantity must be a positive whole number."); return; }
+    const lp = Number(limitPrice || price);
+    if (oType !== "MARKET" && (!Number.isFinite(lp) || lp <= 0)) { setSubmitError("Limit price must be positive."); return; }
+    setSubmitting(true); setSubmitError(null); setVerdict(null);
+    try {
+      const res = await fetch("/api/trades/propose", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: "quant-terminal", symbol: sym, side, quantity: q,
+          order_type: oType === "MARKET" ? "market" : "limit",
+          ...(oType !== "MARKET" ? { limit_price: lp } : {}),
+          strategy: "quant-terminal", confidence: 0.5,
+          reasoning: `Manual ${side} order from the quant terminal (${oType.toLowerCase()}).`,
+        }),
+      });
+      const body = await res.json().catch(() => null) as ProposeResponse | null;
+      if (!res.ok) setSubmitError(body?.error ?? `Risk gate returned ${res.status}`);
+      else { setVerdict(body); fetchOrders(); }
+    } catch { setSubmitError("Could not reach the risk gate."); }
+    finally { setSubmitting(false); }
+  }, [qty, oType, limitPrice, price, sym, side, fetchOrders]);
+
+  // ── Cancel single / all open orders ──────────────────────────────────────────
+  const cancelOrder = useCallback(async (id: string) => {
+    try { await fetch(`/api/orders?id=${encodeURIComponent(id)}`, { method: "DELETE" }); fetchOrders(); } catch {}
+  }, [fetchOrders]);
+  const cancelAll = useCallback(async () => {
+    const open = orders.filter(o => OPEN_ORDER_STATUSES.has(o.status));
+    if (open.length === 0) return;
+    if (!window.confirm(`Cancel ${open.length} open order(s)?`)) return;
+    await Promise.allSettled(open.map(o => fetch(`/api/orders?id=${encodeURIComponent(o.id)}`, { method: "DELETE" })));
+    fetchOrders();
+  }, [orders, fetchOrders]);
 
   const runResearch = useCallback(async (s: string) => {
     if (running) { abortRef.current?.abort(); setRunning(false); return; }
@@ -619,12 +712,13 @@ export default function QuantTerminal() {
                 <div style={{ marginBottom:8 }}>
                   <div style={{ fontSize:9,color:DIM,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:4 }}>LIMIT PRICE</div>
                   <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",background:PN3,border:`1px solid ${BRD}`,borderRadius:4,padding:"5px 8px" }}>
-                    <span style={{ fontSize:13,fontFamily:"monospace",fontWeight:600 }}>{price.toFixed(2)}</span>
+                    <input value={limitPrice||price.toFixed(2)} onChange={e=>setLimitPrice(e.target.value.replace(/[^0-9.]/g,""))}
+                      inputMode="decimal" style={{ flex:1,background:"transparent",border:"none",color:TXT,fontSize:13,fontFamily:"monospace",fontWeight:600,outline:"none",minWidth:0 }}/>
                     <span style={{ fontSize:11,color:DIM }}>USDC</span>
                   </div>
                   <div style={{ display:"flex",gap:3,marginTop:4 }}>
-                    {["MID","BID","1%↓","5%↓"].map(b=>(
-                      <button key={b} style={{ flex:1,padding:"3px 0",background:PN2,border:`1px solid ${BRD}`,color:DIM,fontSize:9,borderRadius:3 }}>{b}</button>
+                    {[["MID",snap?((snap.bid+snap.ask)/2):price],["BID",snap?.bid??price],["1%↓",price*0.99],["5%↓",price*0.95]].map(([b,v])=>(
+                      <button key={String(b)} onClick={()=>setLimitPrice(Number(v).toFixed(2))} style={{ flex:1,padding:"3px 0",background:PN2,border:`1px solid ${BRD}`,color:DIM,fontSize:9,borderRadius:3 }}>{b}</button>
                     ))}
                   </div>
                 </div>
@@ -632,12 +726,13 @@ export default function QuantTerminal() {
               <div style={{ marginBottom:8 }}>
                 <div style={{ fontSize:9,color:DIM,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:4 }}>AMOUNT</div>
                 <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",background:PN3,border:`1px solid ${BRD}`,borderRadius:4,padding:"5px 8px" }}>
-                  <span style={{ fontSize:13,fontFamily:"monospace" }}>0.00000000</span>
+                  <input value={qty} onChange={e=>setQty(e.target.value.replace(/[^0-9]/g,""))}
+                    inputMode="numeric" placeholder="0" style={{ flex:1,background:"transparent",border:"none",color:TXT,fontSize:13,fontFamily:"monospace",outline:"none",minWidth:0 }}/>
                   <span style={{ fontSize:11,color:DIM }}>{sym}</span>
                 </div>
                 <div style={{ display:"flex",gap:3,marginTop:4 }}>
-                  {["25%","50%","MAX"].map(b=>(
-                    <button key={b} style={{ flex:1,padding:"3px 0",background:PN2,border:`1px solid ${BRD}`,color:DIM,fontSize:10,borderRadius:3 }}>{b}</button>
+                  {["-10","-1","+1","+10"].map(b=>(
+                    <button key={b} onClick={()=>setQty(String(Math.max(0,(Math.floor(Number(qty))||0)+Number(b))))} style={{ flex:1,padding:"3px 0",background:PN2,border:`1px solid ${BRD}`,color:DIM,fontSize:10,borderRadius:3 }}>{b}</button>
                   ))}
                 </div>
               </div>
@@ -662,16 +757,38 @@ export default function QuantTerminal() {
                   <span style={{ position:"absolute",right:5,top:"50%",transform:"translateY(-50%)",color:DIM,fontSize:8,pointerEvents:"none" }}>▾</span>
                 </div>
               </div>
-              {[["SUBTOTAL","--"],["FEE","--"],["TOTAL","--"]].map(([l,v])=>(
+              {([
+                ["SUBTOTAL", cost ? `$${cost.gross_notional.toFixed(2)}` : "--"],
+                ["FEE", cost ? `$${cost.total_cost.toFixed(2)}` : "--"],
+                ["TOTAL", cost ? `$${(side==="buy" ? cost.buy_cash_required : cost.sell_net_proceeds).toFixed(2)}` : "--"],
+              ] as [string, string][]).map(([l,v])=>(
                 <div key={l} style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}>
                   <span style={{ fontSize:11,color:DIM }}>{l}</span><span style={{ fontSize:11,color:DIM }}>{v}</span>
                 </div>
               ))}
-              <button style={{
+              <button onClick={()=>void submitOrder()} disabled={submitting} style={{
                 width:"100%",padding:"11px 0",marginTop:10,borderRadius:8,
                 background:side==="buy"?`linear-gradient(135deg,${G},#00966a)`:`linear-gradient(135deg,${R},#b91c1c)`,
-                border:"none",color:"#000",fontSize:13,fontWeight:800,cursor:"pointer",
-              }}>Add funds to continue</button>
+                border:"none",color:"#000",fontSize:13,fontWeight:800,cursor:submitting?"wait":"pointer",opacity:submitting?0.6:1,
+              }}>{submitting?"Submitting…":`${side==="buy"?"Buy":"Sell"} ${sym}`}</button>
+              {submitError&&(
+                <div style={{ marginTop:8,padding:"6px 8px",background:`${R}15`,border:`1px solid ${R}40`,borderRadius:4,fontSize:10,color:R }}>{submitError}</div>
+              )}
+              {verdict&&(
+                <div style={{ marginTop:8,padding:"6px 8px",borderRadius:4,fontSize:10,lineHeight:1.5,
+                  background:verdict.risk?.status==="REJECTED"?`${R}15`:verdict.risk?.status==="ADJUSTED"?`${AMB}15`:`${G}15`,
+                  border:`1px solid ${verdict.risk?.status==="REJECTED"?`${R}40`:verdict.risk?.status==="ADJUSTED"?`${AMB}40`:`${G}40`}`,
+                  color:verdict.risk?.status==="REJECTED"?R:verdict.risk?.status==="ADJUSTED"?AMB:G }}>
+                  <div style={{ fontWeight:700 }}>Risk gate: {verdict.risk?.status??"?"}</div>
+                  {verdict.risk?.reason&&<div style={{ color:DIM }}>{verdict.risk.reason}{verdict.risk.code?` (${verdict.risk.code})`:""}</div>}
+                  {verdict.risk?.original_quantity!==undefined&&verdict.risk?.approved_quantity!==undefined&&verdict.risk.original_quantity!==verdict.risk.approved_quantity&&(
+                    <div>Qty adjusted: {verdict.risk.original_quantity} → {verdict.risk.approved_quantity}</div>
+                  )}
+                  {verdict.order&&(
+                    <div>Order {verdict.order.status}{typeof verdict.order.filled_quantity==="number"?` · filled ${verdict.order.filled_quantity}`:""}{verdict.order.avg_fill_price!=null?` @ $${verdict.order.avg_fill_price}`:""}</div>
+                  )}
+                </div>
+              )}
               <div style={{ fontSize:9,color:DIM,textAlign:"center",marginTop:5 }}>
                 Crypto markets are unique. <span style={{ color:BLU,cursor:"pointer" }}>View more</span>
               </div>
@@ -725,30 +842,34 @@ export default function QuantTerminal() {
         <div style={{ borderTop:`1px solid ${BRD}`,background:PNL,flexShrink:0,maxHeight:170,overflowY:"auto" }}>
           <div style={{ display:"flex",alignItems:"center",padding:"5px 10px",gap:8,borderBottom:`1px solid ${BRD}`,position:"sticky",top:0,background:PNL,zIndex:2 }}>
             <span style={{ fontSize:12,fontWeight:600 }}>Orders</span>
-            <span style={{ fontSize:9,color:DIM }}>?</span>
+            <span style={{ fontSize:9,color:DIM }}>{orders.length}</span>
             <div style={{ flex:1 }}/>
-            <span style={{ fontSize:11,color:R,cursor:"pointer" }}>Cancel all</span>
-            <span style={{ fontSize:11,color:BLU,cursor:"pointer" }}>View all</span>
-            {["ALL MARKETS ▼","ALL STATUSES ▼","⌄"].map(b=>(
-              <button key={b} style={{ padding:"2px 8px",background:PN2,border:`1px solid ${BRD}`,color:TXT,fontSize:10,borderRadius:4 }}>{b}</button>
-            ))}
+            <span onClick={()=>void cancelAll()} style={{ fontSize:11,color:R,cursor:"pointer" }}>Cancel all</span>
+            <span onClick={()=>setShowAllOrders(v=>!v)} style={{ fontSize:11,color:BLU,cursor:"pointer" }}>{showAllOrders?"View less":"View all"}</span>
           </div>
-          {messages.size>0?(
+          {orders.length>0?(
             <>
-              <div style={{ display:"grid",gridTemplateColumns:"90px 80px 55px 50px 1fr 70px 70px",padding:"3px 10px",borderBottom:`1px solid ${BRD}`,gap:6 }}>
-                {["TIME PLACED","NAME","TYPE","SIDE","PRICE","AMOUNT","STATUS"].map(h=>(
+              <div style={{ display:"grid",gridTemplateColumns:"90px 70px 55px 50px 50px 1fr 80px 40px",padding:"3px 10px",borderBottom:`1px solid ${BRD}`,gap:6 }}>
+                {["TIME","SYMBOL","TYPE","SIDE","QTY","FILL PRICE","STATUS",""].map(h=>(
                   <div key={h} style={{ fontSize:8.5,color:DIM,textTransform:"uppercase" }}>{h}</div>
                 ))}
               </div>
-              {Array.from(messages.values()).map((msg:AgentMsg)=>(
-                <div key={msg.role} style={{ display:"grid",gridTemplateColumns:"90px 80px 55px 50px 1fr 70px 70px",padding:"5px 10px",gap:6,alignItems:"center",borderBottom:`1px solid ${BRD}15`,animation:"slideUp 0.2s ease" }}>
-                  <div style={{ fontSize:10,color:DIM }}>{new Date().toLocaleTimeString()}</div>
-                  <div style={{ fontSize:11,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{msg.role.replace(/_/g," ")}</div>
-                  <div style={{ fontSize:10,color:DIM }}>LIMIT</div>
-                  <div style={{ fontSize:10,fontWeight:700,color:msg.stance==="bullish"?G:R }}>{msg.stance==="bullish"?"BUY":"SELL"}</div>
-                  <div style={{ fontSize:10,fontFamily:"monospace" }}>{price.toFixed(2)}</div>
-                  <div style={{ fontSize:10,fontFamily:"monospace" }}>{((msg.confidence??50)/10000).toFixed(6)}</div>
-                  <div style={{ fontSize:9,color:G,background:`${G}15`,padding:"2px 5px",borderRadius:3,textAlign:"center" }}>Filled</div>
+              {orders.slice(0,showAllOrders?orders.length:10).map(o=>(
+                <div key={o.id} style={{ display:"grid",gridTemplateColumns:"90px 70px 55px 50px 50px 1fr 80px 40px",padding:"5px 10px",gap:6,alignItems:"center",borderBottom:`1px solid ${BRD}15` }}>
+                  <div style={{ fontSize:10,color:DIM }}>{new Date(o.created_at).toLocaleTimeString()}</div>
+                  <div style={{ fontSize:11,fontWeight:600 }}>{o.symbol}</div>
+                  <div style={{ fontSize:10,color:DIM }}>{o.order_type}</div>
+                  <div style={{ fontSize:10,fontWeight:700,color:o.side==="buy"?G:R }}>{o.side.toUpperCase()}</div>
+                  <div style={{ fontSize:10,fontFamily:"monospace" }}>{o.quantity}</div>
+                  <div style={{ fontSize:10,fontFamily:"monospace" }}>{o.avg_fill_price!=null?`$${o.avg_fill_price}`:o.limit_price!=null?`limit $${o.limit_price}`:"--"}</div>
+                  <div style={{ fontSize:9,padding:"2px 5px",borderRadius:3,textAlign:"center",
+                    color:o.status==="FILLED"?G:OPEN_ORDER_STATUSES.has(o.status)?BLU:o.status==="REJECTED"||o.status==="FAILED"?R:DIM,
+                    background:o.status==="FILLED"?`${G}15`:OPEN_ORDER_STATUSES.has(o.status)?`${BLU}15`:"transparent" }}>{o.status}</div>
+                  <div>
+                    {OPEN_ORDER_STATUSES.has(o.status)&&(
+                      <span onClick={()=>void cancelOrder(o.id)} style={{ fontSize:10,color:R,cursor:"pointer" }}>✕</span>
+                    )}
+                  </div>
                 </div>
               ))}
             </>
