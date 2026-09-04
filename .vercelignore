@@ -1,0 +1,7 @@
+backend
+fixtures
+reports
+docs
+node_modules
+.env*
+!.env.example

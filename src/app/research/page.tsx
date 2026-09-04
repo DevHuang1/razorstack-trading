@@ -96,10 +96,10 @@ function AgentCard({
     <article
       className="rounded-2xl border p-4 transition-colors min-w-0"
       style={{
-        borderColor: active ? `${profile.accent}66` : "rgba(255,255,255,.08)",
+        borderColor: active ? `${profile.accent}66` : "var(--trading-border)",
         backgroundColor: active
           ? profile.softAccent
-          : "rgba(17, 24, 39, .58)",
+          : "var(--trading-panel)",
       }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -269,7 +269,7 @@ export default function ResearchDeskPage() {
   }, [thesis, actionable, quantityInput]);
 
   return (
-    <div className="min-h-screen bg-[#080b13] px-5 py-8 text-zinc-100 sm:px-8 lg:px-12">
+    <div className="min-h-screen bg-background px-5 py-8 text-foreground sm:px-8 lg:px-12">
       <div className="mx-auto max-w-6xl">
         <header className="flex flex-col justify-between gap-6 border-b border-white/10 pb-8 lg:flex-row lg:items-end">
           <div>

@@ -135,7 +135,7 @@ export default function PortfolioPage() {
   );
 
   return (
-    <div className="flex min-h-screen bg-[#0a0a0f] text-zinc-100">
+    <div className="flex min-h-screen bg-background text-foreground">
       <Sidebar />
       <main className="flex-1 p-6 space-y-6">
         {/* Header */}

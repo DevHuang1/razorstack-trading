@@ -40,7 +40,13 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const upstream = await fetch(backendUrl("/trades/propose"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(process.env.BACKEND_API_KEY
+          ? { "X-API-Key": process.env.BACKEND_API_KEY }
+          : {}),
+      },
       body: JSON.stringify(parsed.data),
       cache: "no-store",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),

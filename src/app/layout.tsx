@@ -28,9 +28,16 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-screen bg-[#080b13] flex">
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            "try { var t = localStorage.getItem('razorstack-theme'); if (t === 'light') document.documentElement.classList.replace('dark', 'light'); } catch (_) {}",
+        }}
+      />
+      <body className="min-h-screen bg-background text-foreground flex">
         <Sidebar />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </body>

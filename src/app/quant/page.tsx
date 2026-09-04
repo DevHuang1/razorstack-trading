@@ -2,13 +2,13 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 
 // ─── Exact Coinbase Advanced colors ─────────────────────────────────────────
-const BG  = "#0e1117";
-const PNL = "#161b27";
-const PN2 = "#1a2235";
-const PN3 = "#0a0e17";
-const BRD = "#252e3f";
-const TXT = "#d1d4dc";
-const DIM = "#787b86";
+const BG  = "var(--trading-bg)";
+const PNL = "var(--trading-panel)";
+const PN2 = "var(--trading-panel-raised)";
+const PN3 = "var(--trading-panel-deep)";
+const BRD = "var(--trading-border)";
+const TXT = "var(--trading-text)";
+const DIM = "var(--trading-muted)";
 const G   = "#26a69a";
 const R   = "#ef5350";
 const BLU = "#2962ff";
