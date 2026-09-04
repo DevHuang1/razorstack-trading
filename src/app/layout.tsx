@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
 import type { ReactNode } from "react";
@@ -31,7 +32,9 @@ export default function RootLayout({ children }: RootLayoutProps) {
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
       suppressHydrationWarning
     >
-      <script
+      <Script
+        id="theme-init"
+        strategy="beforeInteractive"
         dangerouslySetInnerHTML={{
           __html:
             "try { var t = localStorage.getItem('razorstack-theme'); if (t === 'light') document.documentElement.classList.replace('dark', 'light'); } catch (_) {}",
