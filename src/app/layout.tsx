@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { Sidebar } from "@/components/Sidebar";
+import { AppShell } from "@/components/AppShell";
 import type { ReactNode } from "react";
 
 interface RootLayoutProps {
@@ -37,9 +37,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
             "try { var t = localStorage.getItem('razorstack-theme'); if (t === 'light') document.documentElement.classList.replace('dark', 'light'); } catch (_) {}",
         }}
       />
-      <body className="min-h-screen bg-background text-foreground flex">
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+      <body className="min-h-screen bg-[#080b13] flex">
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

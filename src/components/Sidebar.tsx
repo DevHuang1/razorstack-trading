@@ -5,13 +5,12 @@ import { usePathname } from "next/navigation";
 import { ThemeToggle } from "./ThemeToggle";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Home", icon: "⌂" },
-  { href: "/research", label: "Research", icon: "🧠" },
-  { href: "/quant", label: "Quant", icon: "📊" },
-  { href: "/portfolio", label: "Portfolio", icon: "💼" },
-  { href: "/orders", label: "Orders", icon: "↗" },
-  { href: "/risk", label: "Risk", icon: "🛡" },
-  { href: "/alpaca-test", label: "Alpaca", icon: "🪜" },
+  { href: "/home/research", label: "Research", icon: "🧠" },
+  { href: "/home/quant", label: "Quant", icon: "📊" },
+  { href: "/home/portfolio", label: "Portfolio", icon: "💼" },
+  { href: "/home/orders", label: "Orders", icon: "↗" },
+  { href: "/home/risk", label: "Risk", icon: "🛡" },
+  { href: "/home/alpaca-test", label: "Alpaca", icon: "🪜" },
 ];
 
 export function Sidebar() {
