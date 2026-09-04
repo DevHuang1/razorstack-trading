@@ -583,8 +583,8 @@ export default function QuantTerminal() {
         .nav-item:hover{color:${TXT}!important}
       `}</style>
 
-      <div className="w-full max-w-[1600px] mx-auto">
-      <div style={{ display:"flex",flexDirection:"column",height:"100%",overflow:"hidden",background:BG }}>
+      <div className="h-full w-full max-w-[1600px] mx-auto">
+      <div style={{ display:"flex",flexDirection:"column",height:"100%",minWidth:0,overflow:"hidden",background:BG }}>
 
         {/* TOP HEADER */}
         <div style={{ display:"flex",alignItems:"center",background:PNL,borderBottom:`1px solid ${BRD}`,height:44,flexShrink:0,padding:"0 8px",gap:4 }}>
