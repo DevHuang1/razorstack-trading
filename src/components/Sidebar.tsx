@@ -7,6 +7,9 @@ const NAV_ITEMS = [
   { href: "/", label: "Home", icon: "⌂" },
   { href: "/research", label: "Research", icon: "🧠" },
   { href: "/quant", label: "Quant", icon: "📊" },
+  { href: "/portfolio", label: "Portfolio", icon: "💼" },
+  { href: "/orders", label: "Orders", icon: "📋" },
+  { href: "/risk", label: "Risk", icon: "🛡" },
   { href: "/alpaca-test", label: "Alpaca", icon: "🪜" },
 ];
 
