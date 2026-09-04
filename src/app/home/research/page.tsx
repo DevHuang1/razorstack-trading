@@ -32,14 +32,6 @@ interface StreamEvent {
   thesis?: AIThesis;
 }
 
-interface RiskDecision {
-  status: string;
-  reason?: string;
-  order?: { order_id?: string; status?: string };
-  message?: string;
-  error?: string;
-}
-
 const NORMAL_AGENT_ORDER: AgentRole[] = [
   "news",
   "market_research",
@@ -141,9 +133,6 @@ export default function ResearchDeskPage() {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [crisisMode, setCrisisMode] = useState(false);
-  const [quantityInput, setQuantityInput] = useState("10");
-  const [riskDecision, setRiskDecision] = useState<RiskDecision | null>(null);
-  const [proposing, setProposing] = useState(false);
   const { states: backendStates, updates: backendUpdates, connected: backendConnected } =
     useAgentStatusStream();
 
@@ -181,7 +170,6 @@ export default function ResearchDeskPage() {
       setSymbol(nextSymbol);
       setMessages({});
       setThesis(null);
-      setRiskDecision(null);
       setError(null);
       setRunning(true);
       setStatus("Opening the research loop…");
@@ -232,78 +220,10 @@ export default function ResearchDeskPage() {
     [symbolInput, crisisMode],
   );
 
-  const submitTrade = useCallback(
-    async ({
-      side,
-      symbol,
-      confidence,
-      reasoning,
-    }: {
-      side: "buy" | "sell";
-      symbol: string;
-      confidence: number;
-      reasoning: string;
-    }) => {
-      const qty = Number(quantityInput);
-      if (!Number.isInteger(qty) || qty <= 0) {
-        setRiskDecision({ status: "error", error: "Enter a positive whole-number quantity." });
-        return;
-      }
-      setProposing(true);
-      setRiskDecision(null);
-      try {
-        const response = await fetch("/api/trades/propose", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            agent_id: "research-desk",
-            symbol: symbol.toUpperCase(),
-            side,
-            quantity: qty,
-            order_type: "market",
-            strategy: "research-desk",
-            confidence,
-            reasoning: reasoning.slice(0, 4000),
-          }),
-        });
-        const body = (await response.json()) as RiskDecision;
-        setRiskDecision({
-          ...body,
-          status: body.error ? "error" : response.ok ? "approved" : "rejected",
-        });
-      } catch {
-        setRiskDecision({ status: "error", error: "Risk engine is unavailable." });
-      } finally {
-        setProposing(false);
-      }
-    },
-    [quantityInput],
-  );
-
-  const quickOrder = useCallback(
-    (side: "buy" | "sell") => {
-      const sym = symbolInput.trim();
-      if (!/^[A-Za-z]{1,6}$/.test(sym)) {
-        setRiskDecision({ status: "error", error: "Enter a ticker (letters only) first." });
-        return;
-      }
-      const matchesThesis = thesis && thesis.symbol === sym.toUpperCase();
-      void submitTrade({
-        side,
-        symbol: sym,
-        confidence: matchesThesis ? thesis.confidence / 100 : 0.5,
-        reasoning: matchesThesis
-          ? thesis.summary + " " + thesis.recommendation
-          : `Manual ${side} order for ${sym.toUpperCase()}.`,
-      });
-    },
-    [symbolInput, thesis, submitTrade],
-  );
-
   return (
-    <div className="min-h-screen bg-background px-5 py-8 text-foreground sm:px-8 lg:px-12">
+    <div className="min-h-screen bg-background px-6 py-10 text-foreground sm:px-10 lg:px-16">
       <div className="mx-auto max-w-6xl">
-        <header className="flex flex-col justify-between gap-6 border-b border-white/10 pb-8 lg:flex-row lg:items-end">
+        <header className="flex flex-col justify-between gap-10 border-b border-white/10 pb-10 lg:flex-row lg:items-end">
           <div>
             <p className="text-[11px] font-semibold tracking-[.24em] text-violet-300/80 uppercase">
               Razorstack / Intelligence layer
@@ -317,7 +237,7 @@ export default function ResearchDeskPage() {
               synthesis apart at a glance.
             </p>
           </div>
-          <form onSubmit={runDesk} className="flex w-full max-w-sm flex-col gap-3">
+          <form onSubmit={runDesk} className="flex w-full max-w-sm flex-col gap-4">
             <div className="flex gap-2">
               <input
                 value={symbolInput}
@@ -334,50 +254,6 @@ export default function ResearchDeskPage() {
                 {running ? "Running" : "Run desk"}
               </button>
             </div>
-            <div className="flex gap-2">
-              <input
-                value={quantityInput}
-                onChange={(event) => setQuantityInput(event.target.value)}
-                className="w-24 rounded-xl border border-white/10 bg-white/[.04] px-3 py-3 text-center font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-violet-400/70"
-                placeholder="Qty"
-                aria-label="Order quantity"
-              />
-              <button
-                type="button"
-                onClick={() => quickOrder("buy")}
-                disabled={proposing}
-                className="flex-1 rounded-xl bg-emerald-400 px-3 py-3 text-sm font-semibold text-[#04140c] transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Buy"
-              >
-                BUY
-              </button>
-              <button
-                type="button"
-                onClick={() => quickOrder("sell")}
-                disabled={proposing}
-                className="flex-1 rounded-xl bg-rose-400 px-3 py-3 text-sm font-semibold text-[#180608] transition hover:bg-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Sell"
-              >
-                SELL
-              </button>
-            </div>
-            {riskDecision && (
-              <div
-                className={`rounded-xl border px-3 py-2 text-xs ${
-                  riskDecision.status === "approved"
-                    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                    : riskDecision.status === "error"
-                      ? "border-rose-400/30 bg-rose-400/10 text-rose-300"
-                      : "border-amber-400/30 bg-amber-400/10 text-amber-300"
-                }`}
-              >
-                {riskDecision.error
-                  ? riskDecision.error
-                  : `${riskDecision.status.toUpperCase()}${
-                      riskDecision.reason ? ` — ${riskDecision.reason}` : ""
-                    }${riskDecision.order?.status ? ` · ${riskDecision.order.status}` : ""}`}
-              </div>
-            )}
             <label className="flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 text-sm transition-colors select-none
               border-rose-400/20 bg-rose-400/[.05] text-rose-300/80 hover:border-rose-400/40"
             >
@@ -396,7 +272,6 @@ export default function ResearchDeskPage() {
                   setCrisisMode(e.target.checked);
                   setMessages({});
                   setThesis(null);
-                  setRiskDecision(null);
                 }}
               />
               Crisis mode — activate Sentinel, Radar, Gauge, Hedge, Apex
@@ -404,7 +279,7 @@ export default function ResearchDeskPage() {
           </form>
         </header>
 
-        <section className="mt-7 grid gap-3 min-w-0 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="mt-10 grid gap-4 min-w-0 sm:grid-cols-2 xl:grid-cols-5">
           {agentOrder.map((role) => (
             <AgentCard
               key={role}
@@ -414,7 +289,7 @@ export default function ResearchDeskPage() {
           ))}
         </section>
 
-        <section className="mt-6 grid gap-5 min-w-0 overflow-hidden lg:grid-cols-[1.1fr_.9fr]">
+        <section className="mt-10 grid gap-5 min-w-0 overflow-hidden lg:grid-cols-[1.1fr_.9fr]">
           <div className="rounded-2xl border border-white/10 bg-white/[.03] p-5 min-w-0 overflow-hidden">
             <div className="flex items-center justify-between gap-3 min-w-0">
               <div className="min-w-0">
@@ -510,7 +385,7 @@ export default function ResearchDeskPage() {
                       <span className="font-semibold text-zinc-200">
                         {normalizeDirection(thesis.direction) === "bullish" ? "BUY" : "SELL"}
                       </span>{" "}
-                      at {thesis.confidence}% confidence — route it with the order bar above.
+                      at {thesis.confidence}% confidence — place the order from the Trade page.
                     </p>
                   ) : (
                     <p className="mt-5 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs text-zinc-500">

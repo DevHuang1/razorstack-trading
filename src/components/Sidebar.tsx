@@ -7,6 +7,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const NAV_ITEMS = [
   { href: "/home/research", label: "Research", icon: "◉" },
+  { href: "/home/trade", label: "Trade", icon: "⇄" },
   { href: "/home/quant", label: "Quant", icon: "⌁" },
   { href: "/home/portfolio", label: "Portfolio", icon: "▦" },
   { href: "/home/orders", label: "Orders", icon: "↗" },
