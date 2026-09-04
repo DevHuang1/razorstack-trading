@@ -58,6 +58,40 @@ def _enum_value(value) -> str:
     return text.split(".")[-1].lower()
 
 
+# Alpaca's tradable crypto universe (base currencies). Symbols arrive from the
+# account/position APIs in "BTCUSD" form, while data/order requests want the
+# "BTC/USD" pair form.
+_CRYPTO_BASES = {
+    "BTC", "ETH", "LTC", "BCH", "DOGE", "XRP", "ADA", "SOL", "LINK", "DOT",
+    "AVAX", "UNI", "MATIC", "AAVE", "XLM", "ALGO", "SHIB", "APE", "NEAR",
+    "APT", "LDO", "SUI", "ARB", "OP", "INJ", "TRX", "TIA", "SEI",
+}
+
+
+def _crypto_pair(symbol: str) -> str | None:
+    """Return the 'BASE/USD' pair for a crypto symbol, or None for stocks."""
+    cleaned = symbol.strip().upper()
+    if "/" in cleaned:
+        base, quote = cleaned.split("/", 1)
+        if quote == "USD" and base in _CRYPTO_BASES:
+            return cleaned
+        return None
+    if cleaned.endswith("USD"):
+        base = cleaned[:-3]
+        if base in _CRYPTO_BASES:
+            return f"{base}/USD"
+    return None
+
+
+def _compact_symbol(symbol: str) -> str:
+    """Normalize a 'BTC/USD' order symbol back to the account-style 'BTCUSD'."""
+    cleaned = symbol.strip().upper()
+    base, sep, quote = cleaned.partition("/")
+    if sep and quote == "USD" and base in _CRYPTO_BASES:
+        return f"{base}USD"
+    return cleaned
+
+
 class AlpacaService(BrokerService):
     def __init__(
         self,
@@ -95,6 +129,7 @@ class AlpacaService(BrokerService):
                 "ALPACA_CLIENT_ID/ALPACA_CLIENT_SECRET when BROKER_MODE=alpaca"
             )
         try:
+            from alpaca.data.historical import CryptoHistoricalDataClient
             from alpaca.data.historical import StockHistoricalDataClient
             from alpaca.trading.client import TradingClient
         except ImportError as exc:  # pragma: no cover - depends on env
@@ -115,6 +150,12 @@ class AlpacaService(BrokerService):
             url_override=url_override,
         )
         self._data = StockHistoricalDataClient(
+            api_key=None if use_token else api_key,
+            secret_key=None if use_token else secret_key,
+            oauth_token=oauth_token or None,
+            url_override=url_override,
+        )
+        self._crypto = CryptoHistoricalDataClient(
             api_key=None if use_token else api_key,
             secret_key=None if use_token else secret_key,
             oauth_token=oauth_token or None,
@@ -234,7 +275,7 @@ class AlpacaService(BrokerService):
         status = _STATUS_MAP.get(_enum_value(raw.status), "SUBMITTED")
         return BrokerOrder(
             id=str(raw.id),
-            symbol=str(raw.symbol).upper(),
+            symbol=_compact_symbol(str(raw.symbol)),
             side=_enum_value(raw.side),
             order_type=_enum_value(getattr(raw, "type", getattr(raw, "order_type", "market"))),
             quantity=int(float(raw.qty or 0)),
@@ -257,23 +298,26 @@ class AlpacaService(BrokerService):
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
+        pair = _crypto_pair(symbol)
+        alpaca_symbol = pair or symbol.upper()
+        time_in_force = TimeInForce.IOC if pair else TimeInForce.DAY
         alpaca_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
         try:
             if order_type == "market":
                 request = MarketOrderRequest(
-                    symbol=symbol.upper(),
+                    symbol=alpaca_symbol,
                     qty=int(quantity),
                     side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=time_in_force,
                 )
             elif order_type == "limit":
                 if limit_price is None or limit_price <= 0:
                     raise InvalidOrderError("limit orders require a positive limit_price")
                 request = LimitOrderRequest(
-                    symbol=symbol.upper(),
+                    symbol=alpaca_symbol,
                     qty=int(quantity),
                     side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=time_in_force,
                     limit_price=float(limit_price),
                 )
             else:
@@ -337,13 +381,22 @@ class AlpacaService(BrokerService):
 
     # ------------------------------------------------------------- market data
     async def get_market_data(self, symbol: str) -> MarketTick:
-        from alpaca.data.requests import StockLatestTradeRequest
+        from alpaca.data.requests import (
+            CryptoLatestTradeRequest,
+            StockLatestTradeRequest,
+        )
 
         target = symbol.upper()
+        pair = _crypto_pair(target)
         try:
-            request = StockLatestTradeRequest(symbol_or_symbols=target)
-            trades = await self._call(self._data.get_stock_latest_trade, request)
-            trade = trades[target]
+            if pair is not None:
+                request = CryptoLatestTradeRequest(symbol_or_symbols=[pair])
+                trades = await self._call(self._crypto.get_crypto_latest_trade, request)
+                trade = trades[pair]
+            else:
+                request = StockLatestTradeRequest(symbol_or_symbols=target)
+                trades = await self._call(self._data.get_stock_latest_trade, request)
+                trade = trades[target]
         except Exception as exc:
             raise BrokerError(f"alpaca get_market_data failed: {exc}") from exc
         return MarketTick(
