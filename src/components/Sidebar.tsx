@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import { ThemeToggle } from "./ThemeToggle";
 
 const NAV_ITEMS = [
@@ -16,6 +17,19 @@ interface SidebarProps { collapsed: boolean; mobileOpen: boolean; onCloseMobile:
 
 export function Sidebar({ collapsed, mobileOpen, onCloseMobile, onToggleCollapsed }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      onCloseMobile();
+      router.replace("/login");
+      router.refresh();
+    }
+  };
   return (
     <aside className={`dashboard-sidebar ${collapsed ? "is-collapsed" : ""} ${mobileOpen ? "is-mobile-open" : ""}`} aria-label="Dashboard navigation">
       <div className="dashboard-sidebar__brand-row">
@@ -37,6 +51,9 @@ export function Sidebar({ collapsed, mobileOpen, onCloseMobile, onToggleCollapse
         <ThemeToggle compact={collapsed} />
         <button type="button" className="dashboard-sidebar__collapse" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
           <span aria-hidden="true">{collapsed ? "›" : "‹"}</span><span className="dashboard-sidebar__label">Collapse</span>
+        </button>
+        <button type="button" className="dashboard-sidebar__collapse" onClick={handleLogout} disabled={loggingOut} aria-label="Log out" title={collapsed ? "Log out" : undefined}>
+          <span aria-hidden="true">↩</span><span className="dashboard-sidebar__label">{loggingOut ? "Logging out…" : "Log out"}</span>
         </button>
         <p className="dashboard-sidebar__version">v0.1.0</p>
       </div>
