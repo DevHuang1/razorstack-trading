@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useRef, useMemo, useEffect, useSyncExternalStore } from "react";
 
 // ─── Exact Coinbase Advanced colors ─────────────────────────────────────────
 const BG  = "var(--trading-bg)";
@@ -14,6 +14,35 @@ const R   = "#ef5350";
 const BLU = "#2962ff";
 const ORG = "#f7931a";
 const AMB = "#f59e0b";
+
+// ─── Live clock (hydration-safe) ─────────────────────────────────────────────
+// The header clock is rendered with useSyncExternalStore so the server renders a
+// stable placeholder and the client adopts (and ticks) the real time after
+// mount. Rendering new Date() directly caused hydration mismatches (server and
+// client render different seconds).
+const CLOCK_SUBSCRIBE = (onChange: () => void) => {
+  const id = setInterval(onChange, 1000);
+  return () => clearInterval(id);
+};
+let clockCache = { second: -1, value: "" };
+const getClock = (): string => {
+  const now = new Date();
+  const second = Math.floor(now.getTime() / 1000);
+  if (clockCache.second !== second) {
+    clockCache = {
+      second,
+      value:
+        now.toLocaleTimeString("en", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }) + " (UTC+6:30)",
+    };
+  }
+  return clockCache.value;
+};
+const getClockServer = (): string => "--:--:-- (UTC+6:30)";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Side = "buy" | "sell";
@@ -538,8 +567,7 @@ export default function QuantTerminal() {
   },[running,crisis]);
 
   const dirColor=thesis?(thesis.direction==="BUY"?G:thesis.direction==="SELL"?R:AMB):G;
-  const now=new Date();
-  const timeStr=now.toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false})+" (UTC+6:30)";
+  const timeStr=useSyncExternalStore(CLOCK_SUBSCRIBE,getClock,getClockServer);
 
   return (
     <>
