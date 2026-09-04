@@ -63,6 +63,10 @@ backend/*.log
 backend/server.err
 backend/server.log
 
+# Root-level validation / dev-server logs
+/*.log
+validate.done
+
 # Quant paper tracker / runtime data
 .data/
 

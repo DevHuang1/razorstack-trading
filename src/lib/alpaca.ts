@@ -24,6 +24,9 @@ export const tfToAlpaca = (tf: string) => TF[tf] ?? "5Min";
 
 export interface Bar { t: string; o: number; h: number; l: number; c: number; v: number; }
 
+type RawBar = Bar;
+
+
 export interface Snapshot {
   price: number; bid: number; ask: number;
   open: number; high: number; low: number; prevClose: number;
@@ -41,7 +44,7 @@ export async function getBars(sym: string, tf: string, limit = 120): Promise<Bar
       const res = await fetch(url, { headers: h(), cache: "no-store" });
       if (!res.ok) return [];
       const data = await res.json();
-      return (data.bars?.[`${upper}/USD`] ?? []).map((b: any) => ({
+      return (data.bars?.[`${upper}/USD`] ?? []).map((b: RawBar) => ({
         t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
       }));
     } else {
@@ -49,7 +52,7 @@ export async function getBars(sym: string, tf: string, limit = 120): Promise<Bar
       const res = await fetch(url, { headers: h(), cache: "no-store" });
       if (!res.ok) return [];
       const data = await res.json();
-      return (data.bars ?? []).map((b: any) => ({
+      return (data.bars ?? []).map((b: RawBar) => ({
         t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
       }));
     }
@@ -57,7 +60,14 @@ export async function getBars(sym: string, tf: string, limit = 120): Promise<Bar
 }
 
 // ─── Single snapshot ──────────────────────────────────────────────────────────
-function parseSnap(s: any): Snapshot {
+interface RawSnapshotNode {
+  latestTrade?: { p?: number };
+  latestQuote?: { ap?: number; bp?: number };
+  dailyBar?: RawBar;
+  prevDailyBar?: RawBar;
+}
+
+function parseSnap(s: RawSnapshotNode): Snapshot {
   const price = s.latestTrade?.p ?? s.latestQuote?.ap ?? s.latestQuote?.bp ?? 0;
   const open  = s.dailyBar?.o ?? price;
   const change    = price - open;
