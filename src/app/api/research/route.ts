@@ -8,8 +8,11 @@ function ndjson(o: unknown) { return enc.encode(JSON.stringify(o) + "\n"); }
 function status(s: string, d?: string) { return ndjson({ type: "status", step: s, detail: d }); }
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
-  const symbol = body?.symbol.trim().toUpperCase();
-  if (!symbol) return new Response(ndjson({ type: "error", step: "validate", detail: "Invalid symbol" }), { status: 400, headers: { "Content-Type": "application/x-ndjson" } });
+  const rawSymbol = typeof body?.symbol === "string" ? body.symbol.trim() : "";
+  if (!/^[A-Za-z]{1,6}$/.test(rawSymbol)) {
+    return new Response(ndjson({ type: "error", step: "validate", detail: "Invalid symbol" }), { status: 400, headers: { "Content-Type": "application/x-ndjson" } });
+  }
+  const symbol = rawSymbol.toUpperCase();
   const crisis = Boolean(body?.crisis);
   const stream = new ReadableStream({
     async start(controller) {

@@ -35,14 +35,23 @@ function emitStep(agent: string, status: DemoStepEvent["status"], options: DemoR
 
 // Mutates process.env for the duration of `run`: safe only because demo runs are
 // single-flight (concurrent LLM-backed requests would lose their key mid-run).
+// Clears every configured LLM key (XAI / Grok / legacy OpenAI) so deterministic
+// runs always fall back to the offline mock pipeline.
+const LLM_KEYS = ["XAI_API_KEY", "GROK_API_KEY", "OPENAI_API_KEY"] as const;
 async function withDeterministicLock<T>(options: DemoRunOptions, run: () => Promise<T>): Promise<T> {
   if (!options.deterministic) return run();
-  const previousKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  const previous = new Map<string, string | undefined>();
+  for (const k of LLM_KEYS) {
+    previous.set(k, process.env[k]);
+    delete process.env[k];
+  }
   try {
     return await run();
   } finally {
-    if (previousKey !== undefined) process.env.OPENAI_API_KEY = previousKey;
+    for (const k of LLM_KEYS) {
+      const prev = previous.get(k);
+      if (prev !== undefined) process.env[k] = prev;
+    }
   }
 }
 
