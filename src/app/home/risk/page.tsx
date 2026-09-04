@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Sidebar } from "@/components/Sidebar";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface RiskLimits {
@@ -149,9 +148,7 @@ export default function RiskPage() {
   const l = risk?.limits;
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <Sidebar />
-      <main className="flex-1 p-6 space-y-6">
+    <div className="flex-1 p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -327,7 +324,6 @@ export default function RiskPage() {
         {loading && !risk && (
           <div className="text-zinc-500 text-sm">Connecting to backend…</div>
         )}
-      </main>
-    </div>
+      </div>
   );
 }
