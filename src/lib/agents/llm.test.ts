@@ -1,25 +1,38 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { hasLLM } from "./llm";
 
-const ORIGINAL_KEY = process.env.OPENAI_API_KEY;
+const KEYS = ["OPENAI_API_KEY", "XAI_API_KEY", "GROK_API_KEY"] as const;
+const ORIGINAL: Record<string, string | undefined> = {};
+for (const k of KEYS) ORIGINAL[k] = process.env[k];
 
 afterEach(() => {
-  if (ORIGINAL_KEY === undefined) {
-    delete process.env.OPENAI_API_KEY;
-  } else {
-    process.env.OPENAI_API_KEY = ORIGINAL_KEY;
+  for (const k of KEYS) {
+    if (ORIGINAL[k] === undefined) delete process.env[k];
+    else process.env[k] = ORIGINAL[k];
   }
 });
 
 describe("hasLLM", () => {
-  it("is false when the key is missing or empty", () => {
-    delete process.env.OPENAI_API_KEY;
+  it("is false when every key is missing or empty", () => {
+    for (const k of KEYS) delete process.env[k];
     expect(hasLLM()).toBe(false);
     process.env.OPENAI_API_KEY = "";
+    process.env.XAI_API_KEY = "";
+    process.env.GROK_API_KEY = "";
     expect(hasLLM()).toBe(false);
   });
 
-  it("is true when a key is present", () => {
+  it("is true when XAI_API_KEY is present", () => {
+    process.env.XAI_API_KEY = "xai-test-key";
+    expect(hasLLM()).toBe(true);
+  });
+
+  it("is true when GROK_API_KEY is present", () => {
+    process.env.GROK_API_KEY = "grok-test-key";
+    expect(hasLLM()).toBe(true);
+  });
+
+  it("is true when only the legacy OPENAI_API_KEY is present", () => {
     process.env.OPENAI_API_KEY = "test-key";
     expect(hasLLM()).toBe(true);
   });
