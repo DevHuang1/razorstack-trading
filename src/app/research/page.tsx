@@ -94,7 +94,7 @@ function AgentCard({
           : mascotState;
   return (
     <article
-      className="rounded-2xl border p-4 transition-colors"
+      className="rounded-2xl border p-4 transition-colors min-w-0"
       style={{
         borderColor: active ? `${profile.accent}66` : "rgba(255,255,255,.08)",
         backgroundColor: active
@@ -108,7 +108,7 @@ function AgentCard({
           {statusLabel}
         </span>
       </div>
-      <p className="mt-4 text-sm leading-6 text-zinc-300">
+      <p className="mt-4 text-sm leading-6 text-zinc-300 break-words">
         {message?.headline ?? profile.shortDescription}
       </p>
       {message && (
@@ -125,7 +125,7 @@ function AgentCard({
               </span>
             )}
           </div>
-          <p className="mt-3 text-xs leading-5 text-zinc-500">{message.body}</p>
+          <p className="mt-3 text-xs leading-5 text-zinc-500 break-words">{message.body}</p>
         </>
       )}
     </article>
@@ -269,7 +269,7 @@ export default function ResearchDeskPage() {
   }, [thesis, actionable, quantityInput]);
 
   return (
-    <main className="min-h-screen bg-[#080b13] px-5 py-8 text-zinc-100 sm:px-8 lg:px-12">
+    <div className="min-h-screen bg-[#080b13] px-5 py-8 text-zinc-100 sm:px-8 lg:px-12">
       <div className="mx-auto max-w-6xl">
         <header className="flex flex-col justify-between gap-6 border-b border-white/10 pb-8 lg:flex-row lg:items-end">
           <div>
@@ -328,7 +328,7 @@ export default function ResearchDeskPage() {
           </form>
         </header>
 
-        <section className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="mt-7 grid gap-3 min-w-0 sm:grid-cols-2 xl:grid-cols-5">
           {agentOrder.map((role) => (
             <AgentCard
               key={role}
@@ -338,18 +338,18 @@ export default function ResearchDeskPage() {
           ))}
         </section>
 
-        <section className="mt-6 grid gap-5 lg:grid-cols-[1.1fr_.9fr]">
-          <div className="rounded-2xl border border-white/10 bg-white/[.03] p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
+        <section className="mt-6 grid gap-5 min-w-0 overflow-hidden lg:grid-cols-[1.1fr_.9fr]">
+          <div className="rounded-2xl border border-white/10 bg-white/[.03] p-5 min-w-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-3 min-w-0">
+              <div className="min-w-0">
                 <p className="text-[10px] font-semibold tracking-[.18em] text-zinc-500 uppercase">
                   Live run
                 </p>
-                <h2 className="mt-1 text-lg font-semibold">
+                <h2 className="mt-1 text-lg font-semibold truncate">
                   {symbol ?? "No symbol selected"}
                 </h2>
               </div>
-              <span className="font-mono text-xs text-violet-300">
+              <span className="font-mono text-xs text-violet-300 shrink-0">
                 {status} · FastAPI p{backendConnected ? "live" : "offline"}
               </span>
             </div>
@@ -509,6 +509,6 @@ export default function ResearchDeskPage() {
           </p>
         )}
       </div>
-    </main>
+    </div>
   );
 }

@@ -444,7 +444,8 @@ export default function QuantTerminal() {
         .nav-item:hover{color:${TXT}!important}
       `}</style>
 
-      <div style={{ display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden",background:BG }}>
+      <div className="w-full max-w-[1600px] mx-auto">
+      <div style={{ display:"flex",flexDirection:"column",height:"100%",overflow:"hidden",background:BG }}>
 
         {/* TOP HEADER */}
         <div style={{ display:"flex",alignItems:"center",background:PNL,borderBottom:`1px solid ${BRD}`,height:44,flexShrink:0,padding:"0 8px",gap:4 }}>
@@ -490,21 +491,7 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        <div style={{ flex:1,display:"flex",overflow:"hidden" }}>
-
-          {/* LEFT SIDEBAR */}
-          <nav style={{ width:48,background:PNL,borderRight:`1px solid ${BRD}`,display:"flex",flexDirection:"column",alignItems:"center",padding:"6px 0",gap:2,flexShrink:0 }}>
-            {[{icon:"◉",lbl:"Spot",active:true},{icon:"⊘",lbl:"Derivatives"},{icon:"⊡",lbl:"Portfolio"},{icon:"☰",lbl:"Orders"},{icon:"⊛",lbl:"Referral"},{icon:"⊕",lbl:"API"},{icon:"◎",lbl:"Earn"},{icon:"⋯",lbl:"More"}].map(it=>(
-              <div key={it.lbl} className="nav-item" title={it.lbl} style={{ width:36,height:36,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",background:it.active?`${BLU}18`:"transparent",color:it.active?BLU:DIM,fontSize:16,cursor:"pointer",transition:"all 0.15s" }}>{it.icon}</div>
-            ))}
-            <div style={{ flex:1 }}/>
-            <div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:3,paddingBottom:8 }}>
-              <span style={{ fontSize:8.5,color:DIM,textTransform:"uppercase" as any }}>ADV</span>
-              <div onClick={()=>setCrisis(p=>!p)} style={{ width:28,height:16,borderRadius:8,position:"relative",cursor:"pointer",background:crisis?R:"#183060",transition:"background 0.2s" }}>
-                <div style={{ position:"absolute",top:2,left:crisis?14:2,width:12,height:12,borderRadius:"50%",background:"#fff",transition:"left 0.2s" }}/>
-              </div>
-            </div>
-          </nav>
+        <div style={{ flex:1,display:"flex",overflow:"hidden",minWidth:0 }}>
 
           {/* CHART PANEL */}
           <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0 }}>
@@ -767,6 +754,7 @@ export default function QuantTerminal() {
             </div>
           )}
         </div>
+      </div>
       </div>
 
       {modal==="chart_settings"&&<ChartSettingsModal onClose={()=>setModal("none")}/>}
