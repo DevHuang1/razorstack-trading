@@ -274,7 +274,6 @@ export default function HomePage() {
 
       <div className="relative z-10 mx-auto max-w-6xl px-6 py-16 sm:px-10 sm:py-24 lg:px-12">
 
-<<<<<<< HEAD
         {/* ═══════════════════════════════════════════════════════
             HERO
         ═══════════════════════════════════════════════════════ */}
@@ -628,8 +627,6 @@ export default function HomePage() {
           </div>
           <span className="font-mono tracking-wider">v0.1.0</span>
         </footer>
-=======
->>>>>>> 640dac3 (fix: remove unused Alpaca test UI)
       </div>
     </div>
   );
