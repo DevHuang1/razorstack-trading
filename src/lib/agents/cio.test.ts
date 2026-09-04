@@ -16,7 +16,15 @@ async function collectEvents(input: AnalyzeOpportunityInput): Promise<PipelineEv
   for await (const event of runResearchPipeline(input)) {
     events.push(event);
   }
-  return events;
+  return events.map((e) => {
+    if (e.type === "trade_proposal") {
+      return {
+        ...e,
+        proposal: { ...e.proposal, generated_at: "2024-01-01T00:00:00Z" },
+      };
+    }
+    return e;
+  });
 }
 
 describe("runResearchPipeline (v2 DAG, mock mode)", () => {

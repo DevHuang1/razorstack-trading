@@ -46,6 +46,9 @@ function streamedResearchResponse(): Response {
 describe("Research desk agent cards", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamedResearchResponse()));
+    vi.stubGlobal("WebSocket", class {
+      close() {}
+    });
   });
 
   afterEach(() => {
@@ -75,7 +78,7 @@ describe("Research desk agent cards", () => {
       "/api/research",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ symbol: "AAPL" }),
+        body: JSON.stringify({ symbol: "AAPL", crisis: false }),
       }),
     );
   });
@@ -89,5 +92,42 @@ describe("Research desk agent cards", () => {
 
     expect(await screen.findByText("Enter a valid ticker symbol, for example NVDA.")).toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("hands the recommended trade off to the risk engine", async () => {
+    const riskResponse = new Response(
+      JSON.stringify({ risk: { status: "APPROVED" }, order: { order_id: "o-1", status: "SUBMITTED" } }),
+      { status: 200 },
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/research")) return streamedResearchResponse();
+      if (url.includes("/api/trades/propose")) return riskResponse;
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ResearchDeskPage />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Ticker symbol" }), {
+      target: { value: "aapl" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run desk" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Propose to risk engine" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Position quantity" }), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Propose to risk engine" }));
+
+    await waitFor(() => expect(screen.getByText(/APPROVED/)).toBeInTheDocument());
+    const proposeCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes("/api/trades/propose"),
+    ) as [string, RequestInit?] | undefined;
+    expect(proposeCall).toBeDefined();
+    expect(proposeCall![1]).toBeDefined();
+    const payload = JSON.parse(String(proposeCall![1]!.body)) as Record<string, unknown>;
+    expect(payload).toMatchObject({ symbol: "AAPL", side: "buy", quantity: 10, agent_id: "research-desk" });
   });
 });

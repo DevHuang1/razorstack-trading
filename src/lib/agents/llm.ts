@@ -1,18 +1,33 @@
+/**
+ * llm.ts — OpenAI LLM client for the AI Research Desk / StructuredAgent path.
+ *
+ * Set OPENAI_API_KEY in .env.local.
+ * Override the model with OPENAI_MODEL (default: gpt-4o-mini) or the base URL
+ * with OPENAI_BASE_URL.
+ */
+
 import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModel } from "ai";
 
-const DEFAULT_MODEL = "gpt-5.4-mini";
+export const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
-let cached: { openai: ReturnType<typeof createOpenAI>; modelId: string } | null = null;
-
+/**
+ * True when an LLM key is configured for the structured-agent path.
+ */
 export function hasLLM(): boolean {
-  return Boolean(process.env.OPENAI_API_KEY);
+  return Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim());
 }
 
-export function getModel(): LanguageModel {
-  if (!cached) {
-    const openai = createOpenAI();
-    cached = { openai, modelId: process.env.AI_MODEL ?? DEFAULT_MODEL };
+let cachedProvider: ReturnType<typeof createOpenAI> | null = null;
+
+/**
+ * Vercel AI SDK model for the StructuredAgent path (OpenAI).
+ */
+export function getModel(): ReturnType<ReturnType<typeof createOpenAI>> {
+  if (!cachedProvider) {
+    cachedProvider = createOpenAI({
+      apiKey: process.env.OPENAI_API_KEY ?? "",
+      baseURL: process.env.OPENAI_BASE_URL,
+    });
   }
-  return cached.openai(cached.modelId);
+  return cachedProvider(OPENAI_MODEL);
 }

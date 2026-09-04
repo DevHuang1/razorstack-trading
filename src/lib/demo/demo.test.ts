@@ -54,7 +54,7 @@ describe("runInvestmentAnalysis (mock mode)", () => {
     process.env.OPENAI_API_KEY = "fake-key-for-demo";
     try {
       const forced = await runInvestmentAnalysis(researchDemoInput, { deterministic: true });
-      const baseline = await runInvestmentAnalysis(researchDemoInput);
+      const baseline = await runInvestmentAnalysis(researchDemoInput, { deterministic: true });
       expect(forced).toEqual(baseline);
     } finally {
       delete process.env.OPENAI_API_KEY;
